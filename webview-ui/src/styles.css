@@ -1,0 +1,68 @@
+:root {
+  --nc-accent: #7C6FF7;
+  --nc-bg: var(--vscode-editor-background, #1e1e1e);
+  --nc-surface: var(--vscode-sideBar-background, #252526);
+  --nc-border: var(--vscode-panel-border, #3c3c3c);
+  --nc-text: var(--vscode-editor-foreground, #ccc);
+  --nc-muted: var(--vscode-descriptionForeground, #999);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 8px;
+  font-family: var(--vscode-font-family, sans-serif);
+  font-size: var(--vscode-font-size, 13px);
+  color: var(--nc-text);
+  background: var(--nc-bg);
+}
+
+.panel { display: flex; flex-direction: column; gap: 8px; min-height: 100vh; }
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.75em;
+  border: 1px solid var(--nc-border);
+}
+
+.msg-user { align-self: flex-end; background: var(--nc-surface); padding: 8px 12px; border-radius: 8px; max-width: 90%; }
+.msg-ai { align-self: flex-start; background: var(--nc-surface); padding: 8px 12px; border-radius: 8px; max-width: 95%; border-left: 3px solid var(--nc-accent); }
+
+.messages { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+
+.input-row { display: flex; gap: 8px; margin-top: auto; }
+.input-row input, .input-row textarea { flex: 1; background: var(--nc-surface); color: var(--nc-text); border: 1px solid var(--nc-border); padding: 8px; border-radius: 4px; }
+
+.shard-card { border: 1px solid var(--nc-border); border-radius: 4px; padding: 8px; margin: 4px 0; }
+.shard-reason { font-size: 0.75em; color: var(--nc-muted); }
+
+.budget-bar { height: 8px; background: var(--nc-border); border-radius: 4px; overflow: hidden; }
+.budget-fill { height: 100%; background: var(--nc-accent); transition: width 0.3s; }
+.budget-fill.warn { background: #FFD700; }
+.budget-fill.danger { background: var(--vscode-testing-iconFailed, #f44); }
+
+.consent-banner { background: rgba(124,111,247,0.15); border: 1px solid var(--nc-accent); padding: 8px; border-radius: 4px; }
+
+.agent-card { border-left: 4px solid var(--nc-accent); padding: 8px; margin: 4px 0; background: var(--nc-surface); }
+.agent-architect { border-color: #4A9EFF; }
+.agent-security { border-color: #FF4A4A; }
+.agent-performance { border-color: #FF9B4A; }
+.agent-test { border-color: #4AFF9B; }
+
+.step { padding: 8px; border: 1px solid var(--nc-border); border-radius: 4px; margin: 4px 0; }
+.step.done { border-color: var(--vscode-testing-iconPassed, #4AFF9B); }
+
+button {
+  background: var(--nc-accent);
+  color: #fff;
+  border: none;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+button.secondary { background: var(--nc-surface); color: var(--nc-text); border: 1px solid var(--nc-border); }

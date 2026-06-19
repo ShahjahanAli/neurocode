@@ -1,0 +1,28 @@
+services:
+  neurocode-sidecar:
+    build: .
+    ports:
+      - "39291:39291"
+    environment:
+      NEUROCODE_PORT: "39291"
+      NEUROCODE_LLM_PROVIDER: vllm
+      NEUROCODE_VLLM_URL: ${VLLM_URL:-http://host.docker.internal:8000/v1}
+      NEUROCODE_VLLM_KEY: ${VLLM_KEY:-}
+      NEUROCODE_VLLM_MODEL: ${VLLM_MODEL:-Qwen/Qwen2.5-Coder-7B-Instruct}
+      NEUROCODE_OLLAMA_URL: http://ollama:11434
+      NEUROCODE_OLLAMA_MODEL: qwen2.5-coder:7b
+    volumes:
+      - neurocode-data:/data
+      - ${WORKSPACE_PATH:-.}:/workspace
+    working_dir: /workspace
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+
+volumes:
+  neurocode-data:
+  ollama-data:

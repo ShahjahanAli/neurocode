@@ -1,0 +1,638 @@
+# NeuroCode — Agentic VS Code Extension
+# Cursor Rules File v3.0 — AI Constitution for this Project
+# Author: ZMS Digital Solutions — Dhaka, Bangladesh
+# Stack: TypeScript + Node.js Sidecar + React WebView + Ollama/vLLM (RunPod L4 24GB)
+# Acquisition Target: Google / Meta / SpaceX / GitHub
+
+## PROJECT IDENTITY
+
+You are building **NeuroCode** — a VS Code extension that enables agentic coding on low-end GPUs
+by intelligently splitting codebases into small context shards and routing them through local or
+remote LLMs. The primary remote backend is a RunPod L4 24GB GPU running Qwen3-Coder via vLLM.
+
+Three moats being built simultaneously:
+1. **The Shard Architecture** — runs agentic coding on 4GB VRAM locally OR a RunPod L4 remotely
+2. **The Edit Genome** — opt-in dataset of human-verified code edits (data moat)
+3. **Air-Gap Mode** — the only agentic coder that works in classified/regulated environments
+
+---
+
+## FULL ARCHITECTURE OVERVIEW
+
+```
+[VS Code Extension Host]  ←→  [Sidecar Node.js Server :39291]  ←→  [LLM Backend]
+   TypeScript                    CodeGraph                            PRIMARY: RunPod L4 24GB
+   WebView React UI              ShardManager                           vLLM + Qwen3-Coder-AWQ
+   Commands / Keybindings        AgentOrchestrator                      https://{POD_ID}-8000.proxy.runpod.net
+   AttentionOverlay              MultiAgentRunner          ←→         FALLBACK: Ollama localhost:11434
+   GutterHeatmap                 ProjectMemoryGraph                     qwen2.5-coder:7b
+                                 SemanticDriftDetector    ←→  [Edit Genome Collector]
+                                 CausalDebugAgent                SQLite + opt-in sync
+                                 CrossRepoIndexer
+                                 VectorStore (vectra)
+                                 AirGapModeManager
+                                 RunPodLifecycleManager   ←← NEW: pod start/stop/warmup
+                                 LLMRouter (vLLM→Ollama fallback)
+```
+
+### Process 1: Extension Host (TypeScript)
+- Registers commands, keybindings, sidebar, gutter decorations
+- Hosts React WebView panels: Chat, Tasks, Shards, Memory, Debug, Review
+- Communicates with Sidecar via HTTP on localhost:39291
+- Renders AttentionHeatmap overlay directly in editor gutter
+- Shows RunPod pod status in status bar (running/stopped/starting/warm)
+- Reads/writes files via VS Code API only (never fs directly)
+
+### Process 2: Sidecar Server (Node.js / Express)
+- Runs as a child process spawned by the extension on activation
+- Owns all heavy logic: indexing, shard assembly, agent orchestration
+- Hosts LLMRouter: tries vLLM (RunPod) first, falls back to Ollama automatically
+- Hosts RunPodLifecycleManager: start/stop pod, warm-up ping, idle timer
+- Hosts ProjectMemoryGraph, EditGenomeCollector, MultiAgentRunner
+- Hosts SemanticDriftDetector, CausalDebugAgent, CrossRepoIndexer
+- Exposes REST + SSE API consumed by Extension Host
+
+### Process 3: LLM Backend (pluggable with automatic fallback)
+- PRIMARY: vLLM on RunPod L4 24GB — Qwen3-Coder-30B-A3B-AWQ
+  - Endpoint: https://{POD_ID}-8000.proxy.runpod.net/v1
+  - Token budget: 6000 tokens per shard (large context available)
+  - Timeout: 120 seconds (pod may cold-start)
+- FALLBACK: Ollama on localhost:11434 — qwen2.5-coder:7b
+  - Token budget: 3500 tokens per shard (constrained)
+  - Timeout: 60 seconds
+
+---
+
+## DIRECTORY STRUCTURE
+
+```
+neurocode/
+├── .cursorrules                         ← this file
+├── .neurocodeignore
+├── BLUEPRINT.md
+├── package.json
+├── tsconfig.json
+├── esbuild.js
+│
+├── src/                                 ← Extension Host (TypeScript)
+│   ├── extension.ts
+│   ├── commands/
+│   │   ├── askAgent.ts
+│   │   ├── planTask.ts
+│   │   ├── indexProject.ts
+│   │   ├── explainShard.ts
+│   │   ├── debugCause.ts
+│   │   ├── reviewCode.ts
+│   │   ├── showMemory.ts
+│   │   └── toggleAirGap.ts
+│   ├── panels/
+│   │   ├── ChatPanel.ts
+│   │   ├── TaskQueuePanel.ts
+│   │   ├── ShardVisualizerPanel.ts
+│   │   ├── MemoryPanel.ts
+│   │   ├── ReviewPanel.ts
+│   │   └── DebugPanel.ts
+│   ├── editor/
+│   │   ├── AttentionHeatmap.ts
+│   │   ├── GutterDecorations.ts
+│   │   └── HeatmapColors.ts
+│   ├── sidecar/
+│   │   ├── SidecarManager.ts            ← spawns sidecar, passes RunPod env vars
+│   │   └── SidecarClient.ts
+│   └── utils/
+│       ├── config.ts
+│       ├── logger.ts
+│       └── DiffApplier.ts
+│
+├── webview-ui/
+│   ├── package.json
+│   ├── src/
+│   │   ├── App.tsx
+│   │   ├── panels/
+│   │   │   ├── ChatPanel.tsx
+│   │   │   ├── TaskQueuePanel.tsx
+│   │   │   ├── ShardVisualizerPanel.tsx
+│   │   │   ├── MemoryPanel.tsx
+│   │   │   ├── ReviewPanel.tsx
+│   │   │   └── DebugPanel.tsx
+│   │   ├── components/
+│   │   │   ├── MessageBubble.tsx
+│   │   │   ├── ShardCard.tsx
+│   │   │   ├── TaskNode.tsx
+│   │   │   ├── ModelStatusBadge.tsx     ← shows RunPod vs Ollama + pod state
+│   │   │   ├── RunPodStatusBadge.tsx    ← NEW: pod running/stopped/starting
+│   │   │   ├── MemoryNode.tsx
+│   │   │   ├── ReviewAgentCard.tsx
+│   │   │   ├── DriftAlert.tsx
+│   │   │   ├── CausalChain.tsx
+│   │   │   └── GenomeConsentBanner.tsx
+│   │   └── hooks/
+│   │       ├── useVSCodeApi.ts
+│   │       ├── useAgentStream.ts
+│   │       └── useMemoryGraph.ts
+│
+└── sidecar/
+    ├── package.json
+    ├── server.js
+    ├── routes/
+    │   ├── index.js
+    │   ├── agent.js
+    │   ├── indexer.js
+    │   ├── shards.js
+    │   ├── memory.js
+    │   ├── review.js
+    │   ├── debug.js
+    │   ├── genome.js
+    │   ├── crossrepo.js
+    │   └── runpod.js                    ← NEW: /runpod/* pod lifecycle endpoints
+    ├── core/
+    │   ├── CodeGraph.js
+    │   ├── ShardManager.js              ← dynamic token budget (vllm=6000, ollama=3500)
+    │   ├── AgentOrchestrator.js
+    │   ├── LLMAdapter.js
+    │   ├── LLMRouter.js                 ← vLLM first → Ollama fallback
+    │   ├── EmbeddingService.js
+    │   ├── MultiAgentRunner.js
+    │   ├── ProjectMemoryGraph.js
+    │   ├── SemanticDriftDetector.js
+    │   ├── CausalDebugAgent.js
+    │   ├── CrossRepoIndexer.js
+    │   ├── AirGapModeManager.js
+    │   └── RunPodLifecycleManager.js    ← NEW: start/stop/warmup/idle timer
+    ├── genome/
+    │   ├── EditGenomeCollector.js
+    │   ├── AnonymizationPipeline.js
+    │   └── GenomeStorage.js
+    ├── adapters/
+    │   ├── OllamaAdapter.js
+    │   └── VLLMAdapter.js               ← RunPod proxy URL + Qwen3 prompt tuning
+    ├── db/
+    │   ├── sqlite.js
+    │   └── schema.sql
+    └── vector/
+        └── VectorStore.js
+```
+
+---
+
+## CODING RULES
+
+### General
+- TypeScript strict mode for all extension host code
+- ESM modules for sidecar (Node 18+), use .js extensions in imports
+- No class inheritance chains deeper than 2 levels — prefer composition
+- Every public function must have a JSDoc comment with @param and @returns
+- No `any` types in TypeScript — use `unknown` and narrow properly
+- All async functions must handle errors — never unhandled promise rejections
+
+### Extension Host Rules
+- NEVER use `fs` or `path` directly — use `vscode.workspace.fs` and `vscode.Uri`
+- NEVER make HTTP calls from extension host — delegate to sidecar via SidecarClient
+- WebView content must be set via `panel.webview.html` using `getNonce()` for CSP
+- All WebView ↔ Extension communication via `postMessage` / `onDidReceiveMessage`
+- Extension must activate only on command, not on startup (activationEvents)
+- Settings must be read via `vscode.workspace.getConfiguration('neurocode')`
+- AttentionHeatmap decorations must be cleared when panel closes or new call starts
+- SidecarManager MUST pass all RunPod env vars to sidecar child process
+
+### Sidecar Rules
+- Sidecar must start within 3 seconds or extension shows error
+- All routes return `{ success: boolean, data: any, error?: string }`
+- Sidecar must handle SIGTERM cleanly: flush genome buffer, stop idle timer, close DB
+- Never hardcode paths — use `process.cwd()` relative to project root
+- SQLite WAL mode must be enabled for concurrent reads
+- AirGapModeManager must block all outbound network calls when air_gap = true
+- RunPodLifecycleManager idle timer must be stopped on SIGTERM
+
+### LLM Adapter Rules
+- All adapters implement `LLMAdapter` interface:
+  ```typescript
+  interface LLMAdapter {
+    chat(messages: Message[], options: InferenceOptions): Promise<string>
+    stream(messages: Message[], options: InferenceOptions): AsyncGenerator<string>
+    isAvailable(): Promise<boolean>
+    getModelInfo(): Promise<ModelInfo>
+  }
+  ```
+- VLLMAdapter timeout: 120_000ms (RunPod cold start can take 60s)
+- OllamaAdapter timeout: 60_000ms
+- max_tokens: 1500 for code edits, 800 for planning, 1000 for review agents
+- Temperature: 0.1 code edits | 0.3 planning | 0.5 review | 0.7 explanation
+
+### LLM Router Rules (CRITICAL)
+- LLMRouter ALWAYS tries vLLM first if vllmUrl is configured
+- If vLLM isAvailable() returns false: automatically fall back to OllamaAdapter
+- Log fallback event to OutputChannel: "[LLMRouter] vLLM unavailable — falling back to Ollama"
+- Status bar must reflect current active adapter (RunPod or Ollama)
+- Never throw to user on fallback — handle silently, just update status bar
+- If airgap = true: never use vLLM unless vllmUrl is a LAN address (no .runpod.net)
+
+### RunPod Lifecycle Rules (NEW — CRITICAL)
+- RunPodLifecycleManager is ONLY active when provider = 'vllm' and vllmUrl contains 'runpod'
+- On VS Code activate: if autoStart = true, start pod automatically
+- Idle timer: start countdown (default 30 min) after last LLM call completes
+- On idle timeout: stop pod via RunPod API, update status bar to "stopped"
+- On next agent call: if pod stopped, start pod first, wait for ready, then call LLM
+- Pod states: 'stopped' | 'starting' | 'running' | 'warm' | 'stopping' | 'unknown'
+- Warmup call: POST to /v1/chat/completions with { messages: [{role:'user', content:'ready'}], max_tokens: 5 }
+- Poll /v1/models every 5 seconds during startup until model appears (timeout: 3 minutes)
+- RunPod API base URL: https://api.runpod.io/graphql
+- All RunPod API calls use Authorization: Bearer {runpodApiKey}
+- Cost tracking: record start/stop timestamps in SQLite runpod_sessions table
+
+### Shard Assembly Rules (CRITICAL)
+- Token budget is DYNAMIC based on active LLM adapter:
+  - vLLM (RunPod L4 + Qwen3-Coder-AWQ): MAX 6000 tokens
+  - Ollama (local 7B): MAX 3500 tokens
+  - Read from SHARD_MAX_TOKENS env OR derive from provider automatically
+- Priority order (unchanged):
+  1. Active file — never cut, never removed
+  2. Direct imports of active file
+  3. Files importing active file (callers)
+  4. Project Memory hits (weighted)
+  5. Vector similarity top-3
+  6. Type definitions referenced
+- Never exceed budget. Truncate reverse priority order only.
+
+### Qwen3-Coder Prompt Rules (NEW)
+- When model name contains 'Qwen' or 'qwen': use Qwen3-specific system prompt
+- Qwen3 system prompt for code edits (exact):
+  ```
+  You are an expert software engineer using Qwen3-Coder.
+  Analyze the provided code context carefully, then complete the task.
+  Output ONLY the modified code in a fenced block with the filename as a comment on line 1.
+  Format strictly:
+  ```language
+  // filename: relative/path/to/file.ts
+  [complete modified file or relevant function]
+  ```
+  Do not explain. Do not add commentary outside the code block.
+  ```
+- Generic system prompt for other models: same but without Qwen3 reference
+- Planner prompt: identical for all models
+- Review agent prompts: identical for all models (structured JSON output)
+
+### VLLMAdapter RunPod Rules (NEW)
+- Base URL: strip trailing slash from vllmUrl
+- All requests: Authorization: Bearer {vllmApiKey}
+- Endpoint: POST {baseUrl}/chat/completions (NOT /v1/chat/completions — baseUrl already has /v1)
+- Timeout: 120_000ms on all calls
+- Streaming: parse SSE lines starting with 'data: ', skip '[DONE]' sentinel
+- On connection refused or ECONNREFUSED: return isAvailable() = false (triggers fallback)
+- On 401: throw with message "RunPod API key invalid — check neurocode.llm.vllmApiKey"
+- On 404 model not found: throw with model name in message
+
+### Agent Orchestrator Rules
+- Max 8 steps per plan
+- Each step: id, description, dependsOn[], status, shard, output
+- Steps with no dependencies run first; respect DAG order
+- On step failure: retry once with error appended to context, then mark failed
+- Never apply code changes to disk — produce diffs, require user Accept/Reject
+
+### Edit Genome Rules
+- NEVER collect without explicit opt-in consent
+- Anonymize: remove file paths, variable names, string literals, comments
+- Preserve: shard count, token totals, shard reasons, accept/reject signal, latency, model
+- Flush every 60 seconds or every 50 records
+- genome.cloudSync requires separate explicit consent beyond local storage consent
+
+### Multi-Agent Runner Rules
+- Run 4 agents in parallel (Promise.all)
+- Each agent gets its own focused shard
+- Max 4 concurrent LLM calls (hardware constraint for Ollama; cost constraint for RunPod)
+- Agents return structured JSON — never free text
+- On RunPod: all 4 agents share the same vLLM connection (it handles concurrency)
+
+### Air-Gap Mode Rules
+- When airgap = true: AirGapModeManager patches http/https to block external calls
+- vLLM only allowed if vllmUrl is a LAN address (192.168.x.x, 10.x.x.x, or localhost)
+- RunPodLifecycleManager disabled entirely in air-gap mode
+- Audit log written to .neurocode-airgap-audit.log for every network call
+
+---
+
+## FULL SIDECAR API CONTRACT
+
+All responses: `Content-Type: application/json`
+Format: `{ success: boolean, data: any, error?: string }`
+
+### Core
+- GET  /health          → { status, airgap, model, provider, podState, fileCount, tokenBudget }
+- POST /index           → { jobId }
+- GET  /index/status/:jobId → { status, filesProcessed, totalFiles }
+
+### Agent
+- POST /agent/ask       → { response, diff, shardsUsed, attentionMap, tokensUsed, modelUsed, provider, latencyMs }
+- POST /agent/plan      → { planId, steps }
+- POST /agent/plan/:planId/execute → { stepId, status, diff }
+
+### Shards
+- GET  /shards/preview  → { shards, totalTokens, budget, provider }
+
+### Review
+- POST /review/start    → { reviewId, agents[] }
+- GET  /review/:reviewId/stream (SSE) → streams agent results
+
+### Memory
+- POST /memory/record   → { memoryId }
+- GET  /memory/query    → { memories[] }
+- GET  /memory/top      → { memories[] }
+- DELETE /memory/:id    → { deleted }
+
+### Debug
+- POST /debug/cause     → { rootCauseFile, rootCauseLine, explanation, fix, causalChain }
+
+### Drift
+- GET  /drift/status    → { driftedFunctions[] }
+- POST /drift/acknowledge/:symbolId → { acknowledged }
+
+### Genome
+- POST /genome/consent  → records consent
+- GET  /genome/status   → { enabled, recordCount }
+- GET  /genome/stats    → { totalEdits, acceptRate }
+- POST /genome/export   → { filePath }
+
+### Cross-Repo
+- POST /crossrepo/register → { jobId }
+- GET  /crossrepo/list     → { projects[] }
+- POST /crossrepo/search   → { results[] }
+
+### RunPod Lifecycle (NEW)
+- GET  /runpod/status      → { podState, podId, gpuType, costPerHr, uptimeMs, idleMs }
+- POST /runpod/start       → { podState: 'starting' } — starts pod via RunPod API
+- POST /runpod/stop        → { podState: 'stopping' } — stops pod via RunPod API
+- POST /runpod/warmup      → { ready: boolean, latencyMs } — sends test call
+- GET  /runpod/cost        → { sessionMinutes, estimatedCost, currency: 'USD' }
+
+---
+
+## VS CODE SETTINGS SCHEMA (full — add all to package.json)
+
+```json
+{
+  "neurocode.llm.provider":                { "enum": ["ollama","vllm"], "default": "vllm" },
+  "neurocode.llm.ollamaUrl":               { "default": "http://localhost:11434" },
+  "neurocode.llm.ollamaModel":             { "default": "qwen2.5-coder:7b" },
+  "neurocode.llm.vllmUrl":                 { "default": "https://YOUR_POD_ID-8000.proxy.runpod.net/v1" },
+  "neurocode.llm.vllmApiKey":              { "default": "" },
+  "neurocode.llm.vllmModel":               { "default": "Qwen/Qwen2.5-Coder-32B-Instruct-AWQ" },
+  "neurocode.runpod.apiKey":               { "default": "", "description": "RunPod API key for pod lifecycle management" },
+  "neurocode.runpod.podId":                { "default": "", "description": "RunPod pod ID to start/stop" },
+  "neurocode.runpod.autoStart":            { "type": "boolean", "default": true, "description": "Auto-start pod when VS Code opens" },
+  "neurocode.runpod.idleTimeoutMinutes":   { "default": 30, "minimum": 5, "maximum": 240 },
+  "neurocode.runpod.autoStop":             { "type": "boolean", "default": true, "description": "Auto-stop pod after idle timeout" },
+  "neurocode.shard.maxTokens":             { "default": 0, "description": "0 = auto (6000 for vLLM, 3500 for Ollama)" },
+  "neurocode.shard.maxFiles":              { "default": 8 },
+  "neurocode.indexing.excludePatterns":    { "default": ["node_modules",".git","dist","build",".next"] },
+  "neurocode.sidecar.port":                { "default": 39291 },
+  "neurocode.heatmap.enabled":             { "type": "boolean", "default": true },
+  "neurocode.genome.enabled":              { "type": "boolean", "default": false },
+  "neurocode.genome.cloudSync":            { "type": "boolean", "default": false },
+  "neurocode.memory.enabled":              { "type": "boolean", "default": true },
+  "neurocode.memory.maxRecords":           { "default": 5000 },
+  "neurocode.review.parallelAgents":       { "default": 4 },
+  "neurocode.review.agents":               { "default": ["architect","security","performance","test"] },
+  "neurocode.drift.enabled":               { "type": "boolean", "default": true },
+  "neurocode.drift.threshold":             { "default": 0.15 },
+  "neurocode.airgap.enabled":              { "type": "boolean", "default": false },
+  "neurocode.airgap.auditLog":             { "type": "boolean", "default": true },
+  "neurocode.crossrepo.enabled":           { "type": "boolean", "default": false },
+  "neurocode.crossrepo.sharedIndexPath":   { "default": "" }
+}
+```
+
+---
+
+## RUNPOD LIFECYCLE — Implementation Detail
+
+### RunPod GraphQL Mutations
+```javascript
+// Start pod
+const START_POD = `
+  mutation startPod($podId: String!) {
+    podResume(input: { podId: $podId }) {
+      id
+      desiredStatus
+      lastStatusChange
+    }
+  }
+`;
+
+// Stop pod
+const STOP_POD = `
+  mutation stopPod($podId: String!) {
+    podStop(input: { podId: $podId }) {
+      id
+      desiredStatus
+    }
+  }
+`;
+
+// Get pod status
+const POD_STATUS = `
+  query getPod($podId: String!) {
+    pod(input: { podId: $podId }) {
+      id
+      desiredStatus
+      runtime {
+        uptimeInSeconds
+        gpus { id memoryInGiB }
+      }
+      costPerHr
+    }
+  }
+`;
+```
+
+### Pod State Machine
+```
+stopped → [start()] → starting → [poll /v1/models until ready] → running
+running → [warmup ping] → warm
+warm → [LLM call] → warm (reset idle timer)
+warm → [idle timeout] → [stop()] → stopping → stopped
+any → [error] → unknown → [manual intervention or retry]
+```
+
+### Status Bar Display per Pod State
+```
+stopped:  "$(circle-slash) NeuroCode | RunPod stopped | $(chip) fallback: Ollama"
+starting: "$(sync~spin) NeuroCode | RunPod starting..."
+running:  "$(remote-explorer) NeuroCode | Qwen3 on RunPod L4 | {N} files"
+warm:     "$(rocket) NeuroCode | Qwen3 🔥 warm | {N} files | idle: {M}m"
+stopping: "$(sync~spin) NeuroCode | RunPod stopping..."
+```
+
+### Idle Timer Behavior
+- Timer starts immediately after each LLM call completes
+- Timer resets on every new LLM call
+- When timer fires: POST /runpod/stop → show notification "RunPod pod stopped to save cost"
+- If autoStop = false: timer fires but does NOT stop pod — only shows warning
+- Status bar shows idle countdown in last 5 minutes: "idle: 4m"
+
+---
+
+## ATTENTION HEATMAP — Implementation Detail
+
+After every /agent/ask, the sidecar returns attentionMap:
+```json
+{
+  "attentionMap": {
+    "inContext": [{ "file": "path/to/file.ts", "lineStart": 10, "lineEnd": 45 }],
+    "cited":     [{ "file": "path/to/file.ts", "lineStart": 22, "lineEnd": 28 }],
+    "missed":    [{ "file": "path/to/file.ts", "lineStart": 60, "lineEnd": 75 }]
+  }
+}
+```
+
+Decoration types (in AttentionHeatmap.ts):
+- inContext: rgba(124,111,247,0.08) blue glow — lines the LLM read
+- cited: rgba(124,111,247,0.25) bright violet — lines LLM referenced in response
+- missed: rgba(255,155,74,0.06) faded orange — nearby lines NOT included
+
+---
+
+## WEBVIEW UI DESIGN SYSTEM
+
+### Color Palette
+- Background: `var(--vscode-editor-background)` — always use VS Code CSS vars
+- Accent: `#7C6FF7` (violet — brand color, used sparingly)
+- RunPod warm indicator: `#FF6B35` (orange-red — heat/GPU feel)
+- Ollama fallback indicator: `#888888` (grey — less capable)
+
+### Shard Badge Colors
+- active file: `#7C6FF7` | import: `#4A9EFF` | caller: `#FF9B4A`
+- memory hit: `#C97BFF` | semantic: `#4AFF9B` | cross-repo: `#8B8BFF`
+
+### Review Agent Colors
+- architect: `#4A9EFF` | security: `#FF4A4A` | performance: `#FF9B4A` | test: `#4AFF9B`
+
+### RunPodStatusBadge Component
+```tsx
+// Shows in Chat panel header and status bar tooltip
+// pod state → color + icon + label:
+stopped:  grey   $(circle-slash) "Stopped — will auto-start on next call"
+starting: yellow $(sync~spin)    "Starting RunPod L4..."
+running:  green  $(remote)       "RunPod L4 24GB · Qwen3-Coder"
+warm:     orange $(rocket)       "🔥 Warm · {idleRemaining} before auto-stop"
+```
+
+---
+
+## PACKAGES (v3)
+
+### Sidecar (sidecar/package.json)
+```json
+{
+  "express": "^4.18.0",
+  "better-sqlite3": "^9.4.0",
+  "vectra": "^0.7.0",
+  "gpt-tokenizer": "^2.1.2",
+  "chokidar": "^3.5.3",
+  "tree-sitter": "^0.21.0",
+  "tree-sitter-javascript": "^0.21.0",
+  "tree-sitter-typescript": "^0.21.0",
+  "tree-sitter-python": "^0.21.0",
+  "tree-sitter-php": "^0.21.0",
+  "uuid": "^9.0.0",
+  "axios": "^1.6.0",
+  "simple-git": "^3.22.0",
+  "fastest-levenshtein": "^1.0.16",
+  "jsonl-db": "^2.0.0",
+  "node-fetch": "^3.3.0"
+}
+```
+
+### Extension Host devDependencies
+```json
+{
+  "@types/vscode": "^1.85.0",
+  "esbuild": "^0.20.0",
+  "typescript": "^5.3.0"
+}
+```
+
+### WebView UI
+```json
+{
+  "react": "^18.2.0",
+  "react-dom": "^18.2.0",
+  "@vscode/webview-ui-toolkit": "^1.4.0",
+  "react-markdown": "^9.0.0",
+  "react-syntax-highlighter": "^15.5.0",
+  "d3": "^7.9.0"
+}
+```
+
+---
+
+## BUILD PHASES (v3)
+
+### Phase 1 — MVP Core (Weeks 1–8)
+- Extension scaffold, sidecar, indexer, embeddings, shard manager
+- VLLMAdapter for RunPod + OllamaAdapter fallback
+- LLMRouter with automatic vLLM → Ollama fallback
+- Chat panel, Shard Visualizer, Diff apply, Attention Heatmap
+
+### Phase 2 — Agentic Loop (Weeks 9–12)
+- AST dependency graph, Planner agent, Task Queue UI, Step execution
+
+### Phase 3 — RunPod Lifecycle (Weeks 11–13) ← NEW PHASE
+- RunPodLifecycleManager: start/stop via GraphQL API
+- Idle timer with auto-stop
+- Warmup ping sequence
+- Pod status in status bar + WebView badge
+- Cost tracking in SQLite
+
+### Phase 4 — Acquisition Features (Weeks 13–20)
+- Multi-Agent Review, Project Memory, Semantic Drift, Causal Debug
+- Edit Genome Collector, Air-Gap Mode, Cross-Repo Indexer
+
+### Phase 5 — Enterprise & Ship (Weeks 21–28)
+- Docker, Helm, SOC2 docs, Marketplace, technical blog
+
+---
+
+## WHAT NOT TO DO
+
+- Do NOT use langchain or llamaindex
+- Do NOT use Python in the sidecar
+- Do NOT call LLM from Extension Host — always through sidecar
+- Do NOT apply diffs automatically — require user Accept/Reject
+- Do NOT index node_modules, .git, dist, build, .next
+- Do NOT use window.localStorage in WebView
+- Do NOT hardcode model name, pod ID, or API keys — always from settings
+- Do NOT collect genome data without consent
+- Do NOT make external calls when airgap = true
+- Do NOT stop the RunPod pod without checking autoStop setting first
+- Do NOT use RunPod lifecycle when airgap = true
+- Do NOT run more than 4 parallel LLM calls
+
+---
+
+## DEMO SCRIPT v3 (for investor/acquisition presentation)
+
+**Act 1: The Core Innovation (2 min)**
+1. Open a 60-file Node.js project
+2. Status bar: "$(rocket) NeuroCode | Qwen3 🔥 warm | 67 files | idle: 28m"
+3. Ctrl+Shift+A → "Add email uniqueness validation before inserting"
+4. Attention Heatmap lights up — blue gutter lines = what AI read
+5. Shard Visualizer: 4 files, 4840/6000 tokens (RunPod budget), reason badges
+6. Streamed response → View Diff → Accept
+
+**Act 2: The Smart Infrastructure (1 min)**
+7. Show status bar idle countdown: "idle: 2m" → pod auto-stops → "$(circle-slash) Stopped"
+8. Press Ctrl+Shift+A again — status bar: "$(sync~spin) Starting RunPod L4..."
+9. 45 seconds later: warm, response streams in
+10. "The GPU only runs when you're actually coding. No wasted cost."
+
+**Act 3: The Moat Features (3 min)**
+11. Ctrl+Shift+R → 4 review agents run simultaneously on Qwen3
+12. Security finds SQL injection. Performance finds missing index.
+13. Project Memory: "Last time you touched userController, you changed validators/email.js"
+14. Drift alert: "authenticateUser drifted 23% semantically since last commit"
+15. Stack trace → Causal Debug → root cause highlighted red in gutter
+
+**Act 4: The Data + Market Moat (1 min)**
+16. Genome Stats: "4,231 edits | 89% accept rate | 0 identifiable records"
+17. Toggle Air-Gap → pod lifecycle disabled, Ollama takes over
+18. "This is the only agentic coding tool that runs inside SpaceX or a hospital."

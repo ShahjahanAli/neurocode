@@ -1,0 +1,328 @@
+{
+  "name": "neurocode",
+  "displayName": "NeuroCode",
+  "description": "Agentic coding — RunPod L4 + Qwen3-Coder or local Ollama fallback",
+  "version": "0.1.0",
+  "publisher": "zms-digital",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ShahjahanAli/neurocode.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ShahjahanAli/neurocode/issues"
+  },
+  "homepage": "https://github.com/ShahjahanAli/neurocode#readme",
+  "engines": {
+    "vscode": "^1.120.0"
+  },
+  "categories": [
+    "AI",
+    "Machine Learning",
+    "Other"
+  ],
+  "keywords": [
+    "ai",
+    "coding",
+    "agent",
+    "llm",
+    "runpod",
+    "qwen",
+    "offline"
+  ],
+  "activationEvents": [
+    "onCommand:neurocode.askAgent",
+    "onCommand:neurocode.planTask",
+    "onCommand:neurocode.indexProject",
+    "onCommand:neurocode.reviewCode",
+    "onCommand:neurocode.debugCause"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "neurocode.askAgent",
+        "title": "Ask Agent",
+        "category": "NeuroCode"
+      },
+      {
+        "command": "neurocode.planTask",
+        "title": "Plan Multi-Step Task",
+        "category": "NeuroCode"
+      },
+      {
+        "command": "neurocode.indexProject",
+        "title": "Index Project",
+        "category": "NeuroCode"
+      },
+      {
+        "command": "neurocode.explainShard",
+        "title": "Explain Context",
+        "category": "NeuroCode"
+      },
+      {
+        "command": "neurocode.reviewCode",
+        "title": "Review Code (4 Agents)",
+        "category": "NeuroCode"
+      },
+      {
+        "command": "neurocode.debugCause",
+        "title": "Find Root Cause",
+        "category": "NeuroCode"
+      },
+      {
+        "command": "neurocode.showMemory",
+        "title": "Project Memory",
+        "category": "NeuroCode"
+      },
+      {
+        "command": "neurocode.toggleAirGap",
+        "title": "Toggle Air-Gap Mode",
+        "category": "NeuroCode"
+      },
+      {
+        "command": "neurocode.startPod",
+        "title": "Start RunPod",
+        "category": "NeuroCode"
+      },
+      {
+        "command": "neurocode.stopPod",
+        "title": "Stop RunPod",
+        "category": "NeuroCode"
+      },
+      {
+        "command": "neurocode.showCostReport",
+        "title": "RunPod Cost Report",
+        "category": "NeuroCode"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "neurocode.askAgent",
+        "key": "ctrl+shift+a",
+        "mac": "cmd+shift+a"
+      },
+      {
+        "command": "neurocode.reviewCode",
+        "key": "ctrl+shift+r",
+        "mac": "cmd+shift+r"
+      },
+      {
+        "command": "neurocode.debugCause",
+        "key": "ctrl+shift+d",
+        "mac": "cmd+shift+d"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "neurocode-sidebar",
+          "title": "NeuroCode",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "neurocode-sidebar": [
+        {
+          "type": "webview",
+          "id": "neurocode.chatView",
+          "name": "Chat"
+        },
+        {
+          "type": "webview",
+          "id": "neurocode.tasksView",
+          "name": "Task Queue"
+        },
+        {
+          "type": "webview",
+          "id": "neurocode.shardsView",
+          "name": "Shard Visualizer"
+        },
+        {
+          "type": "webview",
+          "id": "neurocode.reviewView",
+          "name": "Code Review"
+        },
+        {
+          "type": "webview",
+          "id": "neurocode.memoryView",
+          "name": "Project Memory"
+        },
+        {
+          "type": "webview",
+          "id": "neurocode.debugView",
+          "name": "Debug"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "NeuroCode",
+      "properties": {
+        "neurocode.llm.provider": {
+          "type": "string",
+          "enum": ["ollama", "vllm", "openai"],
+          "default": "vllm",
+          "description": "Primary LLM provider. vLLM uses RunPod; falls back to Ollama when unavailable."
+        },
+        "neurocode.llm.ollamaUrl": {
+          "type": "string",
+          "default": "http://localhost:11434"
+        },
+        "neurocode.llm.ollamaModel": {
+          "type": "string",
+          "default": "qwen2.5-coder:7b"
+        },
+        "neurocode.llm.vllmUrl": {
+          "type": "string",
+          "default": "",
+          "description": "RunPod vLLM proxy URL with /v1 suffix"
+        },
+        "neurocode.llm.vllmApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "RunPod API key"
+        },
+        "neurocode.llm.vllmModel": {
+          "type": "string",
+          "default": "Qwen/Qwen2.5-Coder-32B-Instruct-AWQ"
+        },
+        "neurocode.shard.maxTokens": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 6000,
+          "description": "Shard token budget. 0 = auto (6000 RunPod / 3500 Ollama)."
+        },
+        "neurocode.shard.maxFiles": {
+          "type": "number",
+          "default": 8
+        },
+        "neurocode.indexing.excludePatterns": {
+          "type": "array",
+          "default": ["node_modules", ".git", "dist", "build", ".next"]
+        },
+        "neurocode.sidecar.port": {
+          "type": "number",
+          "default": 39291
+        },
+        "neurocode.runpod.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "RunPod API key for pod lifecycle management"
+        },
+        "neurocode.runpod.podId": {
+          "type": "string",
+          "default": "",
+          "description": "RunPod pod ID"
+        },
+        "neurocode.runpod.autoStart": {
+          "type": "boolean",
+          "default": true,
+          "description": "Start RunPod pod when extension activates"
+        },
+        "neurocode.runpod.autoStop": {
+          "type": "boolean",
+          "default": true,
+          "description": "Stop pod after idle timeout"
+        },
+        "neurocode.runpod.idleTimeoutMinutes": {
+          "type": "number",
+          "default": 30,
+          "minimum": 5,
+          "maximum": 240
+        },
+        "neurocode.heatmap.enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "neurocode.heatmap.style": {
+          "type": "string",
+          "enum": ["gutter", "inline", "both"],
+          "default": "gutter"
+        },
+        "neurocode.genome.enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "neurocode.genome.cloudSync": {
+          "type": "boolean",
+          "default": false
+        },
+        "neurocode.memory.enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "neurocode.memory.maxRecords": {
+          "type": "number",
+          "default": 5000
+        },
+        "neurocode.review.parallelAgents": {
+          "type": "number",
+          "default": 4,
+          "minimum": 1,
+          "maximum": 4
+        },
+        "neurocode.review.agents": {
+          "type": "array",
+          "default": ["architect", "security", "performance", "test"]
+        },
+        "neurocode.drift.enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "neurocode.drift.threshold": {
+          "type": "number",
+          "default": 0.15,
+          "minimum": 0.05,
+          "maximum": 0.5
+        },
+        "neurocode.airgap.enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "neurocode.airgap.auditLog": {
+          "type": "boolean",
+          "default": true
+        },
+        "neurocode.crossrepo.enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "neurocode.crossrepo.sharedIndexPath": {
+          "type": "string",
+          "default": ""
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "compile": "npm run build:webview && npm run check-types && npm run lint && node esbuild.js",
+    "build:webview": "npm install --prefix webview-ui --ignore-scripts && npm run build --prefix webview-ui",
+    "watch": "npm-run-all -p watch:*",
+    "watch:esbuild": "node esbuild.js --watch",
+    "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
+    "package": "npm run build:webview && npm run check-types && npm run lint && node esbuild.js --production",
+    "compile-tests": "tsc -p . --outDir out",
+    "watch-tests": "tsc -p . -w --outDir out",
+    "pretest": "npm run compile-tests && npm run compile && npm run lint",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "vscode-test",
+    "install:sidecar": "npm install --prefix sidecar --ignore-scripts",
+    "postinstall": "npm run install:sidecar"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.120.0",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "22.x",
+    "typescript-eslint": "^8.56.1",
+    "eslint": "^9.39.3",
+    "esbuild": "^0.27.3",
+    "npm-run-all": "^4.1.5",
+    "typescript": "^5.9.3",
+    "@vscode/test-cli": "^0.0.12",
+    "@vscode/test-electron": "^2.5.2"
+  }
+}

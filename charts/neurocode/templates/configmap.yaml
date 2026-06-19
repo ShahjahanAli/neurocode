@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: neurocode-config
+data:
+  NEUROCODE_PORT: "39291"
+  NEUROCODE_LLM_PROVIDER: "vllm"
+  NEUROCODE_OLLAMA_URL: "http://ollama:11434"
+  SHARD_MAX_TOKENS: "0"

@@ -1,0 +1,8 @@
+neurocode:
+  airgap:
+    enabled: true
+  runpod:
+    autoStart: false
+    podId: ""
+  llm:
+    provider: ollama

@@ -1,0 +1,116 @@
+import { Router } from 'express';
+import { randomUUID } from 'crypto';
+import chokidar from 'chokidar';
+import path from 'path';
+import {
+	walkProjectFiles,
+	indexFile,
+	extractImportPaths,
+	extractSymbols,
+	storeDependencies,
+	storeSymbols,
+} from '../core/CodeGraph.js';
+import { EmbeddingService } from '../core/EmbeddingService.js';
+import { services } from '../core/services.js';
+
+const router = Router();
+
+/** @type {Map<string, { status: string, filesProcessed: number, totalFiles: number }>} */
+const jobs = new Map();
+
+/** @type {import('chokidar').FSWatcher | null} */
+let watcher = null;
+
+/**
+ * @param {string} projectPath
+ */
+function startWatcher(projectPath) {
+	if (watcher) {
+		watcher.close();
+	}
+
+	const exclude = JSON.parse(process.env.NEUROCODE_INDEX_EXCLUDE || '[]');
+	watcher = chokidar.watch(projectPath, {
+		ignored: exclude,
+		ignoreInitial: true,
+	});
+
+	watcher.on('change', (filePath) => {
+		void reindexFile(filePath, projectPath);
+	});
+
+	watcher.on('unlink', (filePath) => {
+		services.db?.prepare('DELETE FROM files WHERE path = ?').run(filePath);
+		void services.vectorStore?.deleteItem(filePath);
+	});
+}
+
+/**
+ * @param {string} filePath
+ * @param {string} projectPath
+ */
+async function reindexFile(filePath, projectPath) {
+	if (!services.db) {
+		return;
+	}
+
+	const { fileId, content, language } = indexFile(filePath, projectPath, services.db);
+	const imports = extractImportPaths(content, language, filePath, projectPath);
+	storeDependencies(fileId, imports, services.db);
+	storeSymbols(fileId, extractSymbols(content, language), services.db);
+
+	try {
+		const snippet = content.slice(0, 2000);
+		const vec = await EmbeddingService.embed(snippet);
+		await services.vectorStore?.addItem(filePath, vec, {
+			file: filePath,
+			relativeFile: path.relative(projectPath, filePath).replace(/\\/g, '/'),
+			content: snippet,
+		});
+	} catch {
+		// embedding optional
+	}
+}
+
+router.post('/', async (req, res) => {
+	const { projectPath } = req.body ?? {};
+	if (!projectPath) {
+		return res.status(400).json({ success: false, error: 'projectPath required' });
+	}
+
+	const jobId = randomUUID();
+	const exclude = JSON.parse(process.env.NEUROCODE_INDEX_EXCLUDE || '[]');
+
+	const files = [];
+	for await (const f of walkProjectFiles(projectPath, exclude)) {
+		files.push(f);
+	}
+
+	jobs.set(jobId, { status: 'running', filesProcessed: 0, totalFiles: files.length });
+
+	void (async () => {
+		for (let i = 0; i < files.length; i++) {
+			await reindexFile(files[i], projectPath);
+			jobs.set(jobId, {
+				status: 'running',
+				filesProcessed: i + 1,
+				totalFiles: files.length,
+			});
+		}
+		jobs.set(jobId, { status: 'done', filesProcessed: files.length, totalFiles: files.length });
+		global.indexStatus = { done: true, fileCount: files.length };
+		startWatcher(projectPath);
+	})();
+
+	res.json({ success: true, data: { jobId } });
+});
+
+router.get('/status/:jobId', (req, res) => {
+	const job = jobs.get(req.params.jobId);
+	if (!job) {
+		return res.status(404).json({ success: false, error: 'Job not found' });
+	}
+	res.json({ success: true, data: job });
+});
+
+export default router;

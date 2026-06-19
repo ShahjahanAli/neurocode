@@ -1,0 +1,620 @@
+# NeuroCode — Agentic VS Code Extension
+# Cursor Rules File v2.0 — AI Constitution for this Project
+# Author: ZMS Digital Solutions — Dhaka, Bangladesh
+# Stack: TypeScript + Node.js Sidecar + React WebView + Ollama/vLLM
+# Acquisition Target: Google / Meta / SpaceX / GitHub
+
+## PROJECT IDENTITY
+
+You are building **NeuroCode** — a VS Code extension that enables agentic coding on low-end GPUs
+by intelligently splitting codebases into small context shards and routing them through local or
+remote LLMs. This is NOT a wrapper around Copilot. It is a ground-up agentic system built for
+acquisition — every architectural decision must create a defensible moat.
+
+Three moats being built simultaneously:
+1. **The Shard Architecture** — runs agentic coding on 4GB VRAM (technical moat)
+2. **The Edit Genome** — opt-in dataset of human-verified code edits (data moat)
+3. **Air-Gap Mode** — the only agentic coder that works in classified/regulated environments (market moat)
+
+---
+
+## FULL ARCHITECTURE OVERVIEW
+
+The system has 3 main processes plus 2 background subsystems:
+
+```
+[VS Code Extension Host]  ←→  [Sidecar Node.js Server :39291]  ←→  [LLM Backend]
+   TypeScript                    CodeGraph                            Ollama / vLLM
+   WebView React UI              ShardManager                        Local or Remote
+   Commands / Keybindings        AgentOrchestrator
+   AttentionOverlay              MultiAgentRunner          ←→  [Edit Genome Collector]
+   GutterHeatmap                 ProjectMemoryGraph               SQLite + opt-in sync
+                                 SemanticDriftDetector
+                                 CausalDebugAgent
+                                 CrossRepoIndexer
+                                 VectorStore (vectra)
+                                 AirGapModeManager
+```
+
+### Process 1: Extension Host (TypeScript)
+- Registers commands, keybindings, sidebar, gutter decorations
+- Hosts React WebView panels: Chat, Tasks, Shards, Memory, Debug, Review
+- Communicates with Sidecar via HTTP on localhost:39291
+- Renders AttentionHeatmap overlay directly in editor gutter
+- Reads/writes files via VS Code API only (never fs directly)
+
+### Process 2: Sidecar Server (Node.js / Express)
+- Runs as a child process spawned by the extension on activation
+- Owns all heavy logic: indexing, shard assembly, agent orchestration
+- Hosts ProjectMemoryGraph (persistent across sessions via SQLite)
+- Hosts EditGenomeCollector (telemetry pipeline)
+- Hosts MultiAgentRunner (parallel specialist agents)
+- Hosts SemanticDriftDetector (tracks embedding drift on git commits)
+- Hosts CausalDebugAgent (stack trace → root cause analysis)
+- Hosts CrossRepoIndexer (shared index across repositories)
+- Exposes REST + SSE API consumed by Extension Host
+
+### Process 3: LLM Backend (pluggable)
+- Default: Ollama on localhost:11434
+- Remote: vLLM on RunPod (configurable endpoint + API key)
+- Interface: OpenAI-compatible /v1/chat/completions endpoint
+- All adapters speak the same internal LLMAdapter interface
+
+---
+
+## DIRECTORY STRUCTURE
+
+```
+neurocode/
+├── .cursorrules                         ← this file
+├── .neurocodeignore                     ← like .gitignore for indexing
+├── BLUEPRINT.md
+├── package.json
+├── tsconfig.json
+├── esbuild.js
+│
+├── src/                                 ← Extension Host (TypeScript)
+│   ├── extension.ts                     ← activate() entry point
+│   ├── commands/
+│   │   ├── askAgent.ts
+│   │   ├── planTask.ts
+│   │   ├── indexProject.ts
+│   │   ├── explainShard.ts
+│   │   ├── debugCause.ts                ← NEW: Causal Debug Agent trigger
+│   │   ├── reviewCode.ts                ← NEW: Multi-agent code review
+│   │   └── showMemory.ts                ← NEW: Project Memory viewer
+│   ├── panels/
+│   │   ├── ChatPanel.ts
+│   │   ├── TaskQueuePanel.ts
+│   │   ├── ShardVisualizerPanel.ts
+│   │   ├── MemoryPanel.ts               ← NEW: Project Memory Graph UI
+│   │   ├── ReviewPanel.ts               ← NEW: Multi-agent review results
+│   │   └── DebugPanel.ts                ← NEW: Causal debug output
+│   ├── editor/
+│   │   ├── AttentionHeatmap.ts          ← NEW: Gutter line highlighting
+│   │   ├── GutterDecorations.ts         ← NEW: Manages decoration types
+│   │   └── HeatmapColors.ts             ← NEW: Color scale for attention
+│   ├── sidecar/
+│   │   ├── SidecarManager.ts
+│   │   └── SidecarClient.ts
+│   └── utils/
+│       ├── config.ts
+│       ├── logger.ts
+│       └── DiffApplier.ts
+│
+├── webview-ui/
+│   ├── package.json
+│   ├── src/
+│   │   ├── App.tsx
+│   │   ├── panels/
+│   │   │   ├── ChatPanel.tsx
+│   │   │   ├── TaskQueuePanel.tsx
+│   │   │   ├── ShardVisualizerPanel.tsx
+│   │   │   ├── MemoryPanel.tsx          ← NEW
+│   │   │   ├── ReviewPanel.tsx          ← NEW
+│   │   │   └── DebugPanel.tsx           ← NEW
+│   │   ├── components/
+│   │   │   ├── MessageBubble.tsx
+│   │   │   ├── ShardCard.tsx
+│   │   │   ├── TaskNode.tsx
+│   │   │   ├── ModelStatusBadge.tsx
+│   │   │   ├── MemoryNode.tsx           ← NEW
+│   │   │   ├── ReviewAgentCard.tsx      ← NEW
+│   │   │   ├── DriftAlert.tsx           ← NEW
+│   │   │   ├── CausalChain.tsx          ← NEW
+│   │   │   └── GenomeConsentBanner.tsx  ← NEW
+│   │   └── hooks/
+│   │       ├── useVSCodeApi.ts
+│   │       ├── useAgentStream.ts
+│   │       └── useMemoryGraph.ts        ← NEW
+│
+└── sidecar/
+    ├── package.json
+    ├── server.js
+    ├── routes/
+    │   ├── index.js
+    │   ├── agent.js
+    │   ├── indexer.js
+    │   ├── shards.js
+    │   ├── memory.js                    ← NEW: /memory/* endpoints
+    │   ├── review.js                    ← NEW: /review/* endpoints
+    │   ├── debug.js                     ← NEW: /debug/cause endpoint
+    │   ├── genome.js                    ← NEW: /genome/* endpoints
+    │   └── crossrepo.js                 ← NEW: /crossrepo/* endpoints
+    ├── core/
+    │   ├── CodeGraph.js
+    │   ├── ShardManager.js
+    │   ├── AgentOrchestrator.js
+    │   ├── LLMAdapter.js
+    │   ├── EmbeddingService.js
+    │   ├── MultiAgentRunner.js          ← NEW
+    │   ├── ProjectMemoryGraph.js        ← NEW
+    │   ├── SemanticDriftDetector.js     ← NEW
+    │   ├── CausalDebugAgent.js          ← NEW
+    │   ├── CrossRepoIndexer.js          ← NEW
+    │   └── AirGapModeManager.js         ← NEW
+    ├── genome/
+    │   ├── EditGenomeCollector.js       ← NEW
+    │   ├── AnonymizationPipeline.js     ← NEW
+    │   └── GenomeStorage.js             ← NEW
+    ├── adapters/
+    │   ├── OllamaAdapter.js
+    │   └── VLLMAdapter.js
+    ├── db/
+    │   ├── sqlite.js
+    │   └── schema.sql
+    └── vector/
+        └── VectorStore.js
+```
+
+---
+
+## CODING RULES
+
+### General
+- TypeScript strict mode for all extension host code
+- ESM modules for sidecar (Node 18+), use .js extensions in imports
+- No class inheritance chains deeper than 2 levels — prefer composition
+- Every public function must have a JSDoc comment with @param and @returns
+- No `any` types in TypeScript — use `unknown` and narrow properly
+- All async functions must handle errors — never unhandled promise rejections
+
+### Extension Host Rules
+- NEVER use `fs` or `path` directly — use `vscode.workspace.fs` and `vscode.Uri`
+- NEVER make HTTP calls from extension host — delegate to sidecar via SidecarClient
+- WebView content must be set via `panel.webview.html` using `getNonce()` for CSP
+- All WebView ↔ Extension communication via `postMessage` / `onDidReceiveMessage`
+- Extension must activate only on command, not on startup (activationEvents)
+- Settings must be read via `vscode.workspace.getConfiguration('neurocode')`
+- AttentionHeatmap decorations must be cleared when panel closes or new call starts
+
+### Sidecar Rules
+- Sidecar must start within 3 seconds or extension shows error
+- All routes return `{ success: boolean, data: any, error?: string }`
+- Sidecar must handle SIGTERM cleanly (close DB, flush vector store, flush genome buffer)
+- Never hardcode paths — use `process.cwd()` relative to project root
+- SQLite WAL mode must be enabled for concurrent reads
+- All file reads go through a FileQueue to prevent I/O storms during indexing
+- AirGapModeManager must block all outbound network calls when air_gap = true
+
+### LLM Adapter Rules
+- All adapters must implement `LLMAdapter` interface:
+  ```typescript
+  interface LLMAdapter {
+    chat(messages: Message[], options: InferenceOptions): Promise<string>
+    stream(messages: Message[], options: InferenceOptions): AsyncGenerator<string>
+    isAvailable(): Promise<boolean>
+    getModelInfo(): Promise<ModelInfo>
+  }
+  ```
+- Always set a hard token limit: max_tokens = 1500 for code generation calls
+- Always include a system prompt that enforces output format
+- Temperature: 0.1 for code edits, 0.3 for planning, 0.5 for review agents, 0.7 for explanation
+
+### Shard Assembly Rules (CRITICAL — unchanged from v1)
+- Hard token budget: 3500 tokens per shard
+- Token counting: use `gpt-tokenizer` package
+- Priority order:
+  1. File containing the cursor position (always included, never cut)
+  2. Direct imports of that file
+  3. Files that import that file (callers)
+  4. Project Memory hits (functions with high decision weight for this task)
+  5. Semantically similar functions (vector search top-3)
+  6. Type definitions referenced
+- If total exceeds budget: truncate in reverse priority order, never cut item 1
+
+### Agent Orchestrator Rules
+- Max 8 steps per plan (prevent infinite loops)
+- Each step: `id`, `description`, `dependsOn[]`, `status`, `shard`, `output`
+- Steps with no dependencies run first; respect DAG order
+- On step failure: retry once with error appended to context, then mark failed
+- Never apply code changes to disk — produce diffs, let user accept/reject
+
+### Edit Genome Rules (CRITICAL — data moat)
+- NEVER collect genome data without explicit opt-in (shown once on first use)
+- Genome records must pass AnonymizationPipeline before storage
+- Anonymization removes: file paths, variable names, string literals, comments
+- Anonymization preserves: AST structure, token types, edit pattern, accept/reject signal
+- Each genome record: { taskEmbedding, shardStructure, diffPattern, accepted, latencyMs, modelUsed }
+- Genome data stored locally in projectPath/.neurocode/genome/
+- Optional cloud sync only with separate explicit consent
+- Genome collector must be completely removable — no coupling to core logic
+
+### Multi-Agent Runner Rules
+- Run specialist agents in parallel (Promise.all), not sequentially
+- Each specialist agent gets its OWN focused shard (not the same context)
+- Specialist agent types: architect, security, performance, test-generator
+- Each agent prompt is hardcoded per type — not dynamically generated
+- Agents return structured JSON results, not free text
+- Total parallel calls must not exceed 4 (GPU/CPU constraint on low-end hardware)
+- Results are merged into a unified ReviewPanel output
+
+### Project Memory Rules
+- Memory is per-project, stored in projectPath/.neurocode/memory.db (separate SQLite)
+- Memory records: { taskDescription, taskEmbedding, filesEdited, diffAccepted, timestamp, weight }
+- Weight increases each time a similar task is accepted, decreases on rejection
+- Memory is used in ShardManager as Priority 4 (above vector search)
+- Memory panel shows top-20 highest-weight decisions, grouped by file
+- Memory is NEVER sent to cloud — local only, always
+
+### Semantic Drift Detector Rules
+- On git commit (detected via chokidar watching .git/COMMIT_EDITMSG):
+  1. Re-embed all modified files
+  2. Compare new embeddings to stored embeddings
+  3. If cosine distance > 0.15 for a function: flag as drifted
+  4. Cross-reference: if function's docstring embedding and body embedding diverge > 0.20: alert
+- Drift alerts appear as gutter icons (yellow warning triangle)
+- Clicking the icon opens a DriftAlert panel explaining what changed semantically
+
+### Causal Debug Agent Rules
+- Input: stack trace (string) + optional error message
+- Step 1: Parse stack trace to extract all file paths + line numbers
+- Step 2: For each frame in the call stack, assemble a micro-shard (200 tokens max each)
+- Step 3: Build a causal chain prompt: "Given this call stack, identify the root cause"
+- Step 4: LLM output must be structured: { rootCauseFile, rootCauseLine, explanation, fix }
+- Step 5: Highlight root cause in gutter with red decoration
+- Step 6: Show CausalChain component in DebugPanel (frame 1 → frame 2 → ... → root)
+- Max call stack depth: 15 frames (truncate beyond that)
+
+### Air-Gap Mode Rules
+- When neurocode.airgap.enabled = true:
+  - All outbound HTTP blocked by AirGapModeManager (throws on any external call)
+  - Only OllamaAdapter allowed (no VLLMAdapter unless vllmUrl is LAN address)
+  - Edit Genome sync disabled
+  - Cross-repo indexer limited to local filesystem paths only
+  - Status bar shows: "$(shield) NeuroCode [AIR-GAP]"
+  - A .neurocode-airgap-audit.log file is written with every action (for compliance)
+
+### Cross-Repo Indexer Rules
+- CrossRepoIndexer manages multiple project paths in a single shared index
+- Shared index stored at: neurocode.crossrepo.sharedIndexPath (configurable)
+- Each project contributes its files tagged with projectId
+- ShardManager can pull shards from any registered project in the shared index
+- Team mode: shared index on a LAN NAS or S3-compatible endpoint (MinIO)
+- Cross-repo shards are always labeled with their source project in the UI
+
+---
+
+## FULL SIDECAR API CONTRACT
+
+All responses: `Content-Type: application/json`
+Format: `{ success: boolean, data: any, error?: string }`
+
+### Core (unchanged)
+- POST /index — start indexing
+- GET /index/status/:jobId — indexing progress
+- GET /health — model + index status
+- POST /agent/ask — single-turn agent call
+- POST /agent/plan — multi-step task planner
+- POST /agent/plan/:planId/execute — execute next step
+- GET /shards/preview — preview context without calling LLM
+
+### NEW: Multi-Agent Review
+```
+POST /review/start
+Request:  { activeFile, cursorLine, projectPath, selection? }
+Response: { reviewId, agents: ['architect','security','performance','test'] }
+
+GET /review/:reviewId/stream  (SSE)
+Streams: { agentType, status: 'running'|'done', result?: ReviewResult }
+
+ReviewResult: {
+  agentType: string,
+  severity: 'info'|'warning'|'error',
+  findings: [{ line, message, suggestion }],
+  diff?: string
+}
+```
+
+### NEW: Project Memory
+```
+POST /memory/record
+Request:  { taskDescription, filesEdited, diffAccepted, latencyMs }
+Response: { memoryId }
+
+GET /memory/query
+Request:  { task, projectPath, topK: 5 }
+Response: { memories: [{ id, taskDescription, weight, filesEdited, timestamp }] }
+
+GET /memory/top
+Request:  { projectPath, limit: 20 }
+Response: { memories: [...] }
+
+DELETE /memory/:memoryId
+Response: { deleted: true }
+```
+
+### NEW: Causal Debug
+```
+POST /debug/cause
+Request:  { stackTrace, errorMessage, projectPath }
+Response: {
+  rootCauseFile, rootCauseLine, explanation,
+  fix: { diff, targetFile },
+  causalChain: [{ frame, file, line, contribution }]
+}
+```
+
+### NEW: Semantic Drift
+```
+GET /drift/status
+Request:  { projectPath }
+Response: { driftedFunctions: [{ file, name, oldSemantic, newSemantic, distance }] }
+
+POST /drift/acknowledge/:functionId
+Response: { acknowledged: true }
+```
+
+### NEW: Edit Genome
+```
+POST /genome/consent  { accepted: boolean }
+GET  /genome/status   → { enabled, recordCount, lastSync }
+GET  /genome/stats    → { totalEdits, acceptRate, topFiles, avgLatency }
+POST /genome/export   → triggers local export to .neurocode/genome/export-{date}.jsonl
+```
+
+### NEW: Cross-Repo
+```
+POST /crossrepo/register  { projectPath, projectId, projectName }
+GET  /crossrepo/list      → { projects: [{id, name, fileCount, lastIndexed}] }
+POST /crossrepo/search    { query, topK, excludeProjectId? }
+→ { results: [{file, project, reason, tokenCount}] }
+```
+
+---
+
+## VS CODE SETTINGS SCHEMA (full — add all to package.json contributes.configuration)
+
+```json
+{
+  "neurocode.llm.provider":                { "enum": ["ollama","vllm","openai"], "default": "ollama" },
+  "neurocode.llm.ollamaUrl":               { "default": "http://localhost:11434" },
+  "neurocode.llm.ollamaModel":             { "default": "qwen2.5-coder:7b" },
+  "neurocode.llm.vllmUrl":                 { "default": "" },
+  "neurocode.llm.vllmApiKey":              { "default": "" },
+  "neurocode.llm.vllmModel":               { "default": "Qwen/Qwen2.5-Coder-7B-Instruct" },
+  "neurocode.shard.maxTokens":             { "default": 3500, "minimum": 1000, "maximum": 6000 },
+  "neurocode.shard.maxFiles":              { "default": 8 },
+  "neurocode.indexing.excludePatterns":    { "default": ["node_modules",".git","dist","build",".next"] },
+  "neurocode.sidecar.port":                { "default": 39291 },
+  "neurocode.heatmap.enabled":             { "type": "boolean", "default": true },
+  "neurocode.heatmap.style":               { "enum": ["gutter","inline","both"], "default": "gutter" },
+  "neurocode.genome.enabled":              { "type": "boolean", "default": false },
+  "neurocode.genome.cloudSync":            { "type": "boolean", "default": false },
+  "neurocode.memory.enabled":              { "type": "boolean", "default": true },
+  "neurocode.memory.maxRecords":           { "default": 5000 },
+  "neurocode.review.parallelAgents":       { "default": 4, "minimum": 1, "maximum": 4 },
+  "neurocode.review.agents":               { "default": ["architect","security","performance","test"] },
+  "neurocode.drift.enabled":               { "type": "boolean", "default": true },
+  "neurocode.drift.threshold":             { "default": 0.15, "minimum": 0.05, "maximum": 0.50 },
+  "neurocode.airgap.enabled":              { "type": "boolean", "default": false },
+  "neurocode.airgap.auditLog":             { "type": "boolean", "default": true },
+  "neurocode.crossrepo.enabled":           { "type": "boolean", "default": false },
+  "neurocode.crossrepo.sharedIndexPath":   { "default": "" }
+}
+```
+
+---
+
+## ATTENTION HEATMAP — Implementation Detail
+
+This is a signature visible feature. In the VS Code editor gutter, after every agent call:
+
+**Blue glow** — lines included in the LLM's context shard
+**Bright highlight** — lines the LLM's response directly referenced or modified
+**Faded orange** — lines NOT included but semantically adjacent (missed context hint)
+
+Implementation in `src/editor/AttentionHeatmap.ts`:
+```typescript
+// Three decoration types
+const inContextDecoration = vscode.window.createTextEditorDecorationType({
+  gutterIconPath: context.asAbsolutePath('media/gutter-in-context.svg'),
+  gutterIconSize: '70%',
+  backgroundColor: 'rgba(124, 111, 247, 0.08)',
+  isWholeLine: true,
+});
+
+const citedDecoration = vscode.window.createTextEditorDecorationType({
+  gutterIconPath: context.asAbsolutePath('media/gutter-cited.svg'),
+  gutterIconSize: '70%',
+  backgroundColor: 'rgba(124, 111, 247, 0.25)',
+  isWholeLine: true,
+  fontWeight: 'bold',
+});
+
+const missedDecoration = vscode.window.createTextEditorDecorationType({
+  gutterIconPath: context.asAbsolutePath('media/gutter-missed.svg'),
+  gutterIconSize: '70%',
+  backgroundColor: 'rgba(255, 155, 74, 0.06)',
+  isWholeLine: true,
+  opacity: '0.6',
+});
+```
+
+Sidecar must return `attentionMap` in every /agent/ask response:
+```json
+{
+  "attentionMap": {
+    "inContext": [{ "file": "...", "lineStart": 10, "lineEnd": 45 }],
+    "cited": [{ "file": "...", "lineStart": 22, "lineEnd": 28 }],
+    "missed": [{ "file": "...", "lineStart": 60, "lineEnd": 75 }]
+  }
+}
+```
+
+---
+
+## WEBVIEW UI DESIGN SYSTEM
+
+### Color Palette (dark theme native)
+- Background: `var(--vscode-editor-background)`
+- Surface: `var(--vscode-sideBar-background)`
+- Border: `var(--vscode-panel-border)`
+- Accent: `#7C6FF7` (violet — NeuroCode brand, used sparingly)
+- Success: `var(--vscode-testing-iconPassed)`
+- Error: `var(--vscode-testing-iconFailed)`
+- Warning: `var(--vscode-editorWarning-foreground)`
+- Text Primary: `var(--vscode-editor-foreground)`
+- Text Muted: `var(--vscode-descriptionForeground)`
+
+### Shard Priority Badge Colors
+- active file: `#7C6FF7` (violet)
+- import: `#4A9EFF` (blue)
+- caller: `#FF9B4A` (orange)
+- memory hit: `#C97BFF` (purple) ← NEW
+- semantic match: `#4AFF9B` (green)
+
+### Review Agent Badge Colors
+- architect: `#4A9EFF` (blue)
+- security: `#FF4A4A` (red)
+- performance: `#FF9B4A` (orange)
+- test-generator: `#4AFF9B` (green)
+
+### New Component Patterns
+- GenomeConsentBanner: shown once, sticky top of Chat panel, dismissible
+- MemoryNode: tree-style component, shows task → files → weight bar
+- ReviewAgentCard: collapsible card per agent, colored header by type
+- DriftAlert: inline warning with old/new semantic description side by side
+- CausalChain: vertical timeline of stack frames, root cause highlighted red
+
+---
+
+## PACKAGES (Updated)
+
+### Extension Host (package.json devDependencies)
+```json
+{
+  "@types/vscode": "^1.85.0",
+  "esbuild": "^0.20.0",
+  "typescript": "^5.3.0"
+}
+```
+
+### Sidecar (sidecar/package.json)
+```json
+{
+  "express": "^4.18.0",
+  "better-sqlite3": "^9.4.0",
+  "vectra": "^0.7.0",
+  "gpt-tokenizer": "^2.1.2",
+  "chokidar": "^3.5.3",
+  "tree-sitter": "^0.21.0",
+  "tree-sitter-javascript": "^0.21.0",
+  "tree-sitter-typescript": "^0.21.0",
+  "tree-sitter-python": "^0.21.0",
+  "tree-sitter-php": "^0.21.0",
+  "uuid": "^9.0.0",
+  "axios": "^1.6.0",
+  "simple-git": "^3.22.0",
+  "fastest-levenshtein": "^1.0.16",
+  "jsonl-db": "^2.0.0"
+}
+```
+
+### WebView UI (webview-ui/package.json)
+```json
+{
+  "react": "^18.2.0",
+  "react-dom": "^18.2.0",
+  "@vscode/webview-ui-toolkit": "^1.4.0",
+  "react-markdown": "^9.0.0",
+  "react-syntax-highlighter": "^15.5.0",
+  "d3": "^7.9.0"
+}
+```
+
+---
+
+## BUILD PHASES (Updated)
+
+### Phase 1 — MVP Core (Weeks 1–8)
+Steps 1–12 from original plan. See CURSOR_PROMPTS.md.
+Deliverable: Working extension with Chat, Shards, Tasks, Diff apply.
+
+### Phase 2 — Agentic Loop (Weeks 9–12)
+Steps 13–16: AST graph, Planner, Task Queue, Step execution.
+Deliverable: Multi-step task planning that completes end-to-end.
+
+### Phase 3 — Acquisition Features (Weeks 13–20)
+Step 17: Attention Heatmap (gutter overlays)
+Step 18: Multi-Agent Code Review
+Step 19: Project Memory Graph
+Step 20: Semantic Drift Detector
+Step 21: Causal Debug Agent
+Step 22: Edit Genome Collector (with consent UI)
+Step 23: Air-Gap Mode + compliance audit log
+Step 24: Cross-Repo Indexer
+
+### Phase 4 — Enterprise & Ship (Weeks 21–28)
+Step 25: Docker Compose deployment for team sidecar
+Step 26: Helm chart for Kubernetes deployment
+Step 27: SOC2 compliance documentation
+Step 28: VS Code Marketplace publish
+Step 29: Technical blog post / paper draft
+
+---
+
+## WHAT NOT TO DO
+
+- Do NOT use `langchain` or `llamaindex` — too heavy, too magical
+- Do NOT use Python in the sidecar — pure Node.js only
+- Do NOT store embeddings in a separate process — vectra runs in-memory in Node
+- Do NOT call the LLM from the Extension Host — always go through sidecar
+- Do NOT apply diffs automatically — always require user confirmation
+- Do NOT index `node_modules`, `.git`, `dist`, `build`, `.next` — ever
+- Do NOT use `window.localStorage` in WebView — use VS Code's `context.globalState`
+- Do NOT hardcode the model name — always read from VS Code settings
+- Do NOT collect genome data without consent — legal and ethical requirement
+- Do NOT make any outbound calls when airgap.enabled = true — throw immediately
+- Do NOT run more than 4 parallel LLM calls — hardware constraint
+- Do NOT store genome data with identifiable file paths or variable names
+
+---
+
+## DEMO SCRIPT v2 (for investor/acquisition presentation)
+
+**Act 1: The Core Innovation (2 min)**
+1. Open a 60-file Node.js project
+2. Show status bar: "$(shield) NeuroCode | qwen2.5-coder:7b | 67 files | 3.2GB VRAM"
+3. Cursor on `createUser()`. Press Ctrl+Shift+A
+4. Type: "Add email uniqueness validation before inserting"
+5. Watch Attention Heatmap light up in the gutter — blue lines = what the AI read
+6. Show Shard Visualizer: 4 files, 2840/3500 tokens, each with reason badge
+7. Streamed response appears → View Diff → Accept
+
+**Act 2: The Moat Features (3 min)**
+8. Press Ctrl+Shift+R (Review). Four agent cards appear simultaneously
+9. Security Agent: flags "SQL injection possible in line 34" with red badge
+10. Performance Agent: "Missing database index on users.email" with orange badge
+11. Show Project Memory panel: "Last time you edited userController, you also changed validators/email.js"
+12. Show Drift Alert on sidebar: "authenticateUser semantic meaning drifted 18% since last commit"
+13. Paste a stack trace into Debug panel → Causal Chain appears → root cause highlighted red
+
+**Act 3: The Data Moat (1 min)**
+14. Open Genome Stats: "4,231 accepted edits | 89% accept rate | 0 identifiable records"
+15. "Every one of these is a training signal no LLM lab can buy. We own this data."
+
+**Act 4: The Market Nobody Else Has (1 min)**
+16. Toggle Air-Gap Mode on → status bar shows [AIR-GAP]
+17. "This is the only agentic coding tool that can run inside SpaceX, a hospital, or a defense contractor."
+18. "GitHub Copilot is banned in 40% of enterprises. We're the answer."

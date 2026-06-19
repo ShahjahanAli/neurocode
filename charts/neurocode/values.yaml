@@ -1,0 +1,11 @@
+replicaCount: 1
+image:
+  repository: neurocode-sidecar
+  tag: "0.1.0"
+neurocode:
+  llm:
+    provider: vllm
+  airgap:
+    enabled: false
+  runpod:
+    autoStart: false

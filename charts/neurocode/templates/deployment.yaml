@@ -1,0 +1,29 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: neurocode-sidecar
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: neurocode-sidecar
+  template:
+    metadata:
+      labels:
+        app: neurocode-sidecar
+    spec:
+      containers:
+        - name: sidecar
+          image: neurocode-sidecar:0.1.0
+          ports:
+            - containerPort: 39291
+          envFrom:
+            - configMapRef:
+                name: neurocode-config
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: neurocode-pvc
