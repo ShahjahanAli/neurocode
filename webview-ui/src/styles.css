@@ -42,6 +42,21 @@ body {
   color: var(--nc-accent);
 }
 
+.batch-progress-banner {
+  background: rgba(124, 111, 247, 0.08);
+  border: 1px dashed var(--nc-accent);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 0.85em;
+  color: var(--vscode-descriptionForeground);
+  animation: batch-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes batch-pulse {
+  0%, 100% { opacity: 0.85; }
+  50% { opacity: 1; }
+}
+
 .messages {
   flex: 1;
   overflow-y: auto;

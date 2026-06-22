@@ -309,7 +309,19 @@
         "neurocode.chat.autoApply": {
           "type": "boolean",
           "default": true,
-          "description": "When true, Implement mode automatically writes generated files to the workspace (like Cursor)."
+          "description": "When true, Implement mode automatically writes generated files to the workspace when a batch completes (like Cursor)."
+        },
+        "neurocode.chat.autoContinue": {
+          "type": "boolean",
+          "default": true,
+          "description": "When true, Implement mode automatically continues generation until output is complete (Cursor-style batch)."
+        },
+        "neurocode.chat.maxContinueRounds": {
+          "type": "number",
+          "default": 8,
+          "minimum": 1,
+          "maximum": 20,
+          "description": "Maximum LLM continuation calls per implement request before stopping."
         }
       }
     }

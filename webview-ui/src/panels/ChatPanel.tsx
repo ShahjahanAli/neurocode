@@ -45,6 +45,7 @@ export function ChatPanel() {
 	const [idleRemainingMs, setIdleRemainingMs] = useState<number | undefined>();
 	const [cost, setCost] = useState<{ estimatedCostUsd?: number; sessionMinutes?: number; llmCalls?: number }>();
 	const [indexing, setIndexing] = useState<string | null>(null);
+	const [batchProgress, setBatchProgress] = useState<string | null>(null);
 	const [genomeConsent, setGenomeConsent] = useState(true);
 	const messagesContainerRef = useRef<HTMLDivElement>(null);
 	const stickToBottomRef = useRef(true);
@@ -99,6 +100,19 @@ export function ChatPanel() {
 			if (msg.type === 'indexingDone') {
 				setIndexing(null);
 			}
+			if (msg.type === 'batchProgress') {
+				setBatchProgress(msg.round > 0 ? (msg.message ?? `Generating part ${msg.round}…`) : null);
+			}
+			if (msg.type === 'streamSetText') {
+				setMessages((m) => {
+					const copy = [...m];
+					const last = copy[copy.length - 1];
+					if (last?.streaming) {
+						copy[copy.length - 1] = { ...last, text: msg.text ?? '' };
+					}
+					return copy;
+				});
+			}
 			if (msg.type === 'streamStart') {
 				setLoading(true);
 				setStreamIntent(null);
@@ -129,6 +143,7 @@ export function ChatPanel() {
 			if (msg.type === 'agentResponse') {
 				setLoading(false);
 				setStreamIntent(null);
+				setBatchProgress(null);
 				setMessages((m) => {
 					const withoutStream = m.filter((x) => !x.streaming);
 					return [...withoutStream, {
@@ -149,6 +164,7 @@ export function ChatPanel() {
 			if (msg.type === 'error') {
 				setLoading(false);
 				setStreamIntent(null);
+				setBatchProgress(null);
 				setMessages((m) => {
 					const withoutStream = m.filter((x) => !x.streaming);
 					return [...withoutStream, {
@@ -208,6 +224,9 @@ export function ChatPanel() {
 
 			{indexing && (
 				<div className="indexing-banner">{indexing}</div>
+			)}
+			{batchProgress && (
+				<div className="batch-progress-banner">{batchProgress}</div>
 			)}
 			<div
 				className="messages"
@@ -292,12 +311,12 @@ export function ChatPanel() {
 							</div>
 						)}
 
-						{m.role === 'assistant' && m.text.includes('```') && m.intent === 'edit' && !m.streaming && (
+						{m.role === 'assistant' && m.text.includes('```') && m.intent === 'edit' && !m.streaming && !loading && (
 							<div className="action-row">
-								<button className="secondary" type="button" onClick={() => vscode.postMessage({ type: 'viewDiff', text: m.text })}>
+								<button className="secondary" type="button" onClick={() => vscode.postMessage({ type: 'viewDiff', text: m.text, sourceText: m.sourceText, shardFiles: m.shards?.map((s) => s.file) })}>
 									View Diff
 								</button>
-								{(!m.filesApplied || m.filesApplied.length === 0) && (
+								{(!m.filesApplied || m.filesApplied.length === 0) && !m.truncated && (
 									<button
 										type="button"
 										onClick={() => vscode.postMessage({

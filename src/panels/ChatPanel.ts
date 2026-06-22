@@ -3,6 +3,7 @@ import type { SidecarManager } from '../sidecar/SidecarManager';
 import type { AttentionHeatmap } from '../editor/AttentionHeatmap';
 import { getWebviewHtml } from './webviewUtils';
 import { applyEdit, applyAllCodeBlocks, parseCodeBlocks, resolveFileUri, showDiff, stripNeuroCodeAppendix, type ParseCodeBlocksOptions } from '../utils/DiffApplier';
+import { buildContinuePrompt, isTruncatedResponse as isTruncatedLlmResponse, mergeContinuation } from '../utils/CodeBatchMerger';
 import type { AgentChatData, ChatIntent, ChatTurn } from '../sidecar/types';
 import { AutoIndexer } from '../services/AutoIndexer';
 import { getConfig } from '../utils/config';
@@ -207,9 +208,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
 	/** @param response - LLM response text. */
 	private isTruncatedResponse(response: string): boolean {
-		const source = stripNeuroCodeAppendix(response);
-		const fences = (source.match(/```/g) ?? []).length;
-		return fences % 2 !== 0;
+		return isTruncatedLlmResponse(response);
 	}
 
 	/** @returns Options for parsing code blocks from the active editor context. */
@@ -230,11 +229,135 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 	}
 
 	/**
+	 * Runs implement generation with optional auto-continuation (Cursor-style batch).
+	 * @param originalTask - User's implement request.
+	 * @param folder - Workspace folder.
+	 * @param editor - Active editor, if any.
+	 * @param forceIntent - Optional intent override for round 1.
+	 * @param options - Batch options for manual continue.
+	 * @returns Merged agent response after all continuation rounds.
+	 */
+	private async runImplementBatch(
+		originalTask: string,
+		folder: vscode.WorkspaceFolder,
+		editor: vscode.TextEditor | undefined,
+		forceIntent?: ChatIntent,
+		options?: { seedAccumulated?: string; isManualContinue?: boolean },
+	): Promise<AgentChatData> {
+		const cfg = getConfig();
+		const maxRounds = cfg.chat.autoContinue ? cfg.chat.maxContinueRounds : 1;
+		let accumulated = options?.seedAccumulated ?? '';
+		let batchResult: AgentChatData | null = null;
+		const startRound = accumulated ? 1 : 0;
+
+		for (let round = startRound; round < maxRounds; round++) {
+			if (round > startRound || (round === 1 && accumulated)) {
+				this.post({
+					type: 'batchProgress',
+					round: round + 1,
+					message: `Generating part ${round + 1}…`,
+				});
+			}
+
+			const isContinueRound = round > 0 || Boolean(accumulated);
+			const roundTask = isContinueRound ? buildContinuePrompt(accumulated) : originalTask;
+
+			const history: ChatTurn[] = isContinueRound
+				? (options?.isManualContinue
+					? this.conversationHistory.slice(0, -1)
+					: [
+						...this.conversationHistory.slice(0, -1),
+						{ role: 'user', content: originalTask },
+						{ role: 'assistant', content: accumulated },
+					])
+				: this.conversationHistory.slice(0, -1);
+
+			let roundText = '';
+			const data = await this.sidecar.client.chatStream(
+				{
+					task: roundTask,
+					activeFile: editor?.document.uri.fsPath,
+					cursorLine: editor?.selection.active.line,
+					projectPath: folder.uri.fsPath,
+					history,
+					forceIntent: isContinueRound ? 'edit' : forceIntent,
+				},
+				(chunk) => {
+					if (chunk.type === 'intent' && !isContinueRound) {
+						this.post({ type: 'streamIntent', intent: chunk.intent });
+					}
+					if (chunk.type === 'token' && chunk.content) {
+						roundText += chunk.content;
+						if (!isContinueRound) {
+							this.post({ type: 'streamToken', content: chunk.content });
+						} else {
+							const display = mergeContinuation(accumulated, roundText);
+							this.post({ type: 'streamSetText', text: display });
+						}
+					}
+				},
+			);
+
+			accumulated = isContinueRound
+				? mergeContinuation(accumulated, data.response)
+				: data.response;
+
+			if (isContinueRound) {
+				this.post({ type: 'streamSetText', text: accumulated });
+			}
+
+			batchResult = this.mergeBatchRound(batchResult, data, accumulated);
+
+			const shouldContinue =
+				cfg.chat.autoContinue &&
+				batchResult.intent === 'edit' &&
+				this.isTruncatedResponse(accumulated);
+
+			if (!shouldContinue) {
+				break;
+			}
+		}
+
+		this.post({ type: 'batchProgress', round: 0 });
+		if (!batchResult) {
+			throw new Error('No response from agent');
+		}
+		return batchResult;
+	}
+
+	/**
+	 * Merges a single LLM round into the running batch result.
+	 * @param previous - Prior batch state, if any.
+	 * @param round - Latest round response from the sidecar.
+	 * @param accumulated - Combined text across all rounds so far.
+	 * @returns Updated batch state.
+	 */
+	private mergeBatchRound(
+		previous: AgentChatData | null,
+		round: AgentChatData,
+		accumulated: string,
+	): AgentChatData {
+		return {
+			...round,
+			response: accumulated,
+			intent: round.intent ?? previous?.intent ?? 'edit',
+			shardsUsed: round.shardsUsed?.length ? round.shardsUsed : previous?.shardsUsed ?? [],
+			tokensUsed: (previous?.tokensUsed ?? 0) + (round.tokensUsed ?? 0),
+			latencyMs: (previous?.latencyMs ?? 0) + (round.latencyMs ?? 0),
+		};
+	}
+
+	/**
 	 * Runs a chat agent request with streaming.
 	 * @param task - User task text.
 	 * @param forceIntent - Optional intent override.
+	 * @param options - Batch options for manual continue.
 	 */
-	private async runAgentTask(task: string, forceIntent?: ChatIntent): Promise<void> {
+	private async runAgentTask(
+		task: string,
+		forceIntent?: ChatIntent,
+		options?: { seedAccumulated?: string; isManualContinue?: boolean },
+	): Promise<void> {
 		const folder = vscode.workspace.workspaceFolders?.[0];
 		if (!folder) {
 			this.post({ type: 'error', message: 'Open a workspace folder first.' });
@@ -243,30 +366,23 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
 		this.heatmap.clear();
 		const editor = vscode.window.activeTextEditor;
-		this.appendStoredMessage({ role: 'user', text: task });
-		this.post({ type: 'appendMessage', message: { role: 'user', text: task } });
+
+		if (!options?.isManualContinue) {
+			this.appendStoredMessage({ role: 'user', text: task });
+			this.post({ type: 'appendMessage', message: { role: 'user', text: task } });
+		}
+
 		this.post({ type: 'streamStart' });
 
 		try {
 			await this.ensureIndexed(folder.uri.fsPath);
 
-			const data = await this.sidecar.client.chatStream(
-				{
-					task,
-					activeFile: editor?.document.uri.fsPath,
-					cursorLine: editor?.selection.active.line,
-					projectPath: folder.uri.fsPath,
-					history: this.conversationHistory.slice(0, -1),
-					forceIntent,
-				},
-				(chunk) => {
-					if (chunk.type === 'intent') {
-						this.post({ type: 'streamIntent', intent: chunk.intent });
-					}
-					if (chunk.type === 'token' && chunk.content) {
-						this.post({ type: 'streamToken', content: chunk.content });
-					}
-				},
+			const data = await this.runImplementBatch(
+				task,
+				folder,
+				editor,
+				forceIntent,
+				options,
 			);
 
 			const finalData = await this.maybeAutoApplyEdits(data, folder.uri.fsPath);
@@ -303,10 +419,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 				provider: finalData.provider,
 			});
 		} catch (err) {
+			this.post({ type: 'batchProgress', round: 0 });
 			const errText = err instanceof Error ? err.message : String(err);
-			this.uiMessages.pop();
-			this.persistChat();
-			this.syncConversationHistory();
+			if (!options?.isManualContinue) {
+				this.uiMessages.pop();
+				this.persistChat();
+				this.syncConversationHistory();
+			}
 			this.appendStoredMessage({
 				role: 'assistant',
 				text: `**Error:** ${errText}`,
@@ -341,18 +460,31 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 			return data;
 		}
 
-		const applyOptions = this.getApplyOptions(data.shardsUsed);
-		const blocks = parseCodeBlocks(data.response, applyOptions).filter((b) => b.filename);
+		const truncated = this.isTruncatedResponse(data.response);
+		const applyOptions = {
+			...this.getApplyOptions(data.shardsUsed),
+			allowIncomplete: false,
+		};
+
+		if (truncated) {
+			return {
+				...data,
+				truncated: true,
+				filesApplied: [],
+				response: `${data.response}\n\n---\n**Generation incomplete** — hit the continuation limit before all code was produced. Say **continue** to resume; no files were written to avoid partial saves.`,
+			};
+		}
+
+		const blocks = parseCodeBlocks(data.response, applyOptions).filter((b) => b.filename && b.code.trim());
 		if (blocks.length === 0) {
 			return {
 				...data,
-				truncated: this.isTruncatedResponse(data.response),
-				response: `${data.response}\n\n---\n**Note:** No files were written — code blocks need a path. Use \`// filename: src/path/to/file.ts\` as the first line inside each block, or click **Accept** while the target file is open.`,
+				truncated: false,
+				response: `${data.response}\n\n---\n**Note:** No files were written — code blocks need a path. Use \`// filename: src/path/to/file.ts\` as the first line inside each block.`,
 			};
 		}
 
 		const result = await applyAllCodeBlocks(data.response, projectPath, applyOptions);
-		const truncated = this.isTruncatedResponse(data.response);
 		let response = data.response;
 
 		if (result.applied.length > 0) {
@@ -371,12 +503,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 			});
 		}
 
-		if (truncated && result.applied.length > 0) {
-			response += '\n\n⚠️ **Response was cut off.** Click **Continue** (or say `continue`) to generate the rest.';
-		} else if (truncated) {
-			response += '\n\n⚠️ **Response was cut off.** Click **Accept** to apply partial code, then **Continue** for the rest.';
-		}
-
 		if (result.failed.length > 0) {
 			response += `\n\n**Failed to write:** ${result.failed.join(', ')}`;
 		}
@@ -385,7 +511,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 			...data,
 			response,
 			filesApplied: result.applied,
-			truncated,
+			truncated: false,
 		};
 	}
 
@@ -414,15 +540,35 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 				this.postRestoreChat();
 				break;
 			case 'askAgent': {
-				await this.runAgentTask(msg.task ?? '', msg.forceIntent);
+				const task = msg.task ?? '';
+				const lastAssistant = [...this.uiMessages].reverse().find((m) => m.role === 'assistant');
+				const isContinue = /^continue\b/i.test(task.trim());
+				const seed = lastAssistant
+					? stripNeuroCodeAppendix(lastAssistant.sourceText ?? lastAssistant.text)
+					: '';
+
+				if (isContinue && seed && (lastAssistant?.truncated || isTruncatedLlmResponse(seed))) {
+					this.appendStoredMessage({ role: 'user', text: task });
+					this.post({ type: 'appendMessage', message: { role: 'user', text: task } });
+					await this.runAgentTask(task, 'edit', {
+						seedAccumulated: seed,
+						isManualContinue: true,
+					});
+				} else {
+					await this.runAgentTask(task, msg.forceIntent);
+				}
 				break;
 			}
 			case 'continueGeneration': {
-				const applied = msg.appliedFiles ?? [];
-				const continueTask = applied.length > 0
-					? `Continue the previous implementation. These files were already written: ${applied.join(', ')}. Output ONLY the remaining files or the COMPLETE remainder of any truncated file. Each block MUST start with // filename: relative/path`
-					: 'Continue the previous implementation. Output the remaining complete files. Each block MUST start with // filename: relative/path';
-				await this.runAgentTask(continueTask, 'edit');
+				const lastAssistant = [...this.uiMessages].reverse().find((m) => m.role === 'assistant');
+				const seed = stripNeuroCodeAppendix(lastAssistant?.sourceText ?? lastAssistant?.text ?? '');
+				if (!seed) {
+					return;
+				}
+				await this.runAgentTask(buildContinuePrompt(seed), 'edit', {
+					seedAccumulated: seed,
+					isManualContinue: true,
+				});
 				break;
 			}
 			case 'executePlanStep': {
@@ -547,21 +693,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 				void vscode.window.showInformationMessage(
 					`NeuroCode: Applied ${result.applied.length} file(s)`,
 				);
-
-				const truncated = msg.truncated ?? this.isTruncatedResponse(rawText);
-				if (truncated) {
-					const choice = await vscode.window.showInformationMessage(
-						'Code was partially generated. Continue to finish the remaining files?',
-						'Continue',
-						'Not now',
-					);
-					if (choice === 'Continue') {
-						await this.runAgentTask(
-							`Continue the previous implementation. These files were already written: ${result.applied.map((f) => f.file).join(', ')}. Output ONLY the remaining files or the COMPLETE remainder of any truncated file. Each block MUST start with // filename: relative/path`,
-							'edit',
-						);
-					}
-				}
 				break;
 			}
 			case 'startPod':

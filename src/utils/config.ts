@@ -57,7 +57,7 @@ export interface NeuroCodeConfig {
 	review: { parallelAgents: number; agents: string[] };
 	drift: { enabled: boolean; threshold: number };
 	crossrepo: { enabled: boolean; sharedIndexPath: string };
-	chat: { autoApply: boolean };
+	chat: { autoApply: boolean; autoContinue: boolean; maxContinueRounds: number };
 }
 
 /**
@@ -129,6 +129,8 @@ export function getConfig(): NeuroCodeConfig {
 		},
 		chat: {
 			autoApply: cfg.get<boolean>('chat.autoApply', true),
+			autoContinue: cfg.get<boolean>('chat.autoContinue', true),
+			maxContinueRounds: cfg.get<number>('chat.maxContinueRounds', 8),
 		},
 	};
 }
