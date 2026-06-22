@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import type { SidecarManager } from '../sidecar/SidecarManager';
 import type { AttentionHeatmap } from '../editor/AttentionHeatmap';
 import { getWebviewHtml } from './webviewUtils';
-import { applyEdit, applyAllCodeBlocks, parseCodeBlocks, resolveFileUri, showDiff } from '../utils/DiffApplier';
+import { applyEdit, applyAllCodeBlocks, parseCodeBlocks, resolveFileUri, showDiff, stripNeuroCodeAppendix, type ParseCodeBlocksOptions } from '../utils/DiffApplier';
 import type { AgentChatData, ChatIntent, ChatTurn } from '../sidecar/types';
 import { AutoIndexer } from '../services/AutoIndexer';
 import { getConfig } from '../utils/config';
@@ -21,6 +21,7 @@ interface StoredChatMessage {
 	planId?: string;
 	steps?: Array<{ id: string; description: string; status: string }>;
 	filesApplied?: Array<{ file: string; action: 'created' | 'updated' }>;
+	truncated?: boolean;
 }
 
 /**
@@ -189,8 +190,121 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
 	/** @param response - LLM response text. */
 	private isTruncatedResponse(response: string): boolean {
-		const fences = (response.match(/```/g) ?? []).length;
+		const source = stripNeuroCodeAppendix(response);
+		const fences = (source.match(/```/g) ?? []).length;
 		return fences % 2 !== 0;
+	}
+
+	/** @returns Options for parsing code blocks from the active editor context. */
+	private getApplyOptions(): ParseCodeBlocksOptions {
+		const editor = vscode.window.activeTextEditor;
+		const folder = vscode.workspace.workspaceFolders?.[0];
+		const fallbackFilename =
+			editor && folder
+				? vscode.workspace.asRelativePath(editor.document.uri, false)
+				: undefined;
+
+		return {
+			allowIncomplete: true,
+			fallbackFilename,
+		};
+	}
+
+	/**
+	 * Runs a chat agent request with streaming.
+	 * @param task - User task text.
+	 * @param forceIntent - Optional intent override.
+	 */
+	private async runAgentTask(task: string, forceIntent?: ChatIntent): Promise<void> {
+		const folder = vscode.workspace.workspaceFolders?.[0];
+		if (!folder) {
+			this.post({ type: 'error', message: 'Open a workspace folder first.' });
+			return;
+		}
+
+		this.heatmap.clear();
+		const editor = vscode.window.activeTextEditor;
+		this.appendStoredMessage({ role: 'user', text: task });
+		this.post({ type: 'appendMessage', message: { role: 'user', text: task } });
+		this.post({ type: 'streamStart' });
+
+		try {
+			await this.ensureIndexed(folder.uri.fsPath);
+
+			const data = await this.sidecar.client.chatStream(
+				{
+					task,
+					activeFile: editor?.document.uri.fsPath,
+					cursorLine: editor?.selection.active.line,
+					projectPath: folder.uri.fsPath,
+					history: this.conversationHistory.slice(0, -1),
+					forceIntent,
+				},
+				(chunk) => {
+					if (chunk.type === 'intent') {
+						this.post({ type: 'streamIntent', intent: chunk.intent });
+					}
+					if (chunk.type === 'token' && chunk.content) {
+						this.post({ type: 'streamToken', content: chunk.content });
+					}
+				},
+			);
+
+			const finalData = await this.maybeAutoApplyEdits(data, folder.uri.fsPath);
+
+			this.appendStoredMessage({
+				role: 'assistant',
+				text: finalData.response,
+				provider: finalData.provider,
+				modelUsed: finalData.modelUsed,
+				intent: finalData.intent,
+				shards: finalData.shardsUsed,
+				planId: finalData.planId,
+				steps: finalData.steps,
+				filesApplied: finalData.filesApplied,
+				truncated: finalData.truncated,
+			});
+
+			lastAgentResponse = finalData;
+			this.heatmap.apply(finalData.attentionMap, editor?.document.uri.fsPath);
+
+			this.post({
+				type: 'agentResponse',
+				data: finalData,
+			});
+
+			void this.sidecar.client.post('/memory/record', {
+				taskDescription: task,
+				filesEdited: finalData.filesApplied?.map((f) => f.file) ?? finalData.shardsUsed.map((s) => s.file),
+				diffAccepted: (finalData.filesApplied?.length ?? 0) > 0,
+				latencyMs: finalData.latencyMs,
+				modelUsed: finalData.modelUsed,
+				provider: finalData.provider,
+			});
+		} catch (err) {
+			const errText = err instanceof Error ? err.message : String(err);
+			this.uiMessages.pop();
+			this.persistChat();
+			this.syncConversationHistory();
+			this.appendStoredMessage({
+				role: 'assistant',
+				text: `**Error:** ${errText}`,
+				intent: 'chat',
+			});
+			this.post({
+				type: 'agentResponse',
+				data: {
+					response: `**Error:** ${errText}`,
+					intent: 'chat',
+					shardsUsed: [],
+					tokensUsed: 0,
+					budget: 0,
+					modelUsed: '',
+					provider: 'unknown',
+					latencyMs: 0,
+				},
+			});
+		}
 	}
 
 	/**
@@ -206,15 +320,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 			return data;
 		}
 
-		const blocks = parseCodeBlocks(data.response).filter((b) => b.filename);
+		const applyOptions = this.getApplyOptions();
+		const blocks = parseCodeBlocks(data.response, applyOptions).filter((b) => b.filename);
 		if (blocks.length === 0) {
 			return {
 				...data,
-				response: `${data.response}\n\n---\n**Note:** No files were written. Say **"implement …"** or **"go for it"** to apply code to your project.`,
+				truncated: this.isTruncatedResponse(data.response),
+				response: `${data.response}\n\n---\n**Note:** No files were written — code blocks need a path. Use \`// filename: src/path/to/file.ts\` as the first line inside each block, or click **Accept** while the target file is open.`,
 			};
 		}
 
-		const result = await applyAllCodeBlocks(data.response, projectPath);
+		const result = await applyAllCodeBlocks(data.response, projectPath, applyOptions);
 		const truncated = this.isTruncatedResponse(data.response);
 		let response = data.response;
 
@@ -234,8 +350,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 			});
 		}
 
-		if (truncated) {
-			response += '\n\n⚠️ **Response may be truncated.** Say **"continue"** to finish remaining code.';
+		if (truncated && result.applied.length > 0) {
+			response += '\n\n⚠️ **Response was cut off.** Click **Continue** (or say `continue`) to generate the rest.';
+		} else if (truncated) {
+			response += '\n\n⚠️ **Response was cut off.** Click **Accept** to apply partial code, then **Continue** for the rest.';
 		}
 
 		if (result.failed.length > 0) {
@@ -259,6 +377,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 		text?: string;
 		planId?: string;
 		forceIntent?: ChatIntent;
+		truncated?: boolean;
+		appliedFiles?: string[];
 	}): Promise<void> {
 		const folder = vscode.workspace.workspaceFolders?.[0];
 		if (!folder && msg.type === 'askAgent') {
@@ -271,90 +391,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 				this.postRestoreChat();
 				break;
 			case 'askAgent': {
-				this.heatmap.clear();
-				const editor = vscode.window.activeTextEditor;
-				const task = msg.task ?? '';
-				this.appendStoredMessage({ role: 'user', text: task });
-				this.post({ type: 'appendMessage', message: { role: 'user', text: task } });
-
-				this.post({ type: 'streamStart' });
-
-				try {
-					await this.ensureIndexed(folder!.uri.fsPath);
-
-					const data = await this.sidecar.client.chatStream(
-						{
-							task,
-							activeFile: editor?.document.uri.fsPath,
-							cursorLine: editor?.selection.active.line,
-							projectPath: folder!.uri.fsPath,
-							history: this.conversationHistory.slice(0, -1),
-							forceIntent: msg.forceIntent,
-						},
-						(chunk) => {
-							if (chunk.type === 'intent') {
-								this.post({ type: 'streamIntent', intent: chunk.intent });
-							}
-							if (chunk.type === 'token' && chunk.content) {
-								this.post({ type: 'streamToken', content: chunk.content });
-							}
-						},
-					);
-
-					const finalData = await this.maybeAutoApplyEdits(data, folder!.uri.fsPath);
-
-					this.appendStoredMessage({
-						role: 'assistant',
-						text: finalData.response,
-						provider: finalData.provider,
-						modelUsed: finalData.modelUsed,
-						intent: finalData.intent,
-						shards: finalData.shardsUsed,
-						planId: finalData.planId,
-						steps: finalData.steps,
-						filesApplied: finalData.filesApplied,
-					});
-
-					lastAgentResponse = finalData;
-					this.heatmap.apply(finalData.attentionMap, editor?.document.uri.fsPath);
-
-					this.post({
-						type: 'agentResponse',
-						data: finalData,
-					});
-
-					void this.sidecar.client.post('/memory/record', {
-						taskDescription: task,
-						filesEdited: finalData.filesApplied?.map((f) => f.file) ?? finalData.shardsUsed.map((s) => s.file),
-						diffAccepted: (finalData.filesApplied?.length ?? 0) > 0,
-						latencyMs: finalData.latencyMs,
-						modelUsed: finalData.modelUsed,
-						provider: finalData.provider,
-					});
-				} catch (err) {
-					const errText = err instanceof Error ? err.message : String(err);
-					this.uiMessages.pop();
-					this.persistChat();
-					this.syncConversationHistory();
-					this.appendStoredMessage({
-						role: 'assistant',
-						text: `**Error:** ${errText}`,
-						intent: 'chat',
-					});
-					this.post({
-						type: 'agentResponse',
-						data: {
-							response: `**Error:** ${errText}`,
-							intent: 'chat',
-							shardsUsed: [],
-							tokensUsed: 0,
-							budget: 0,
-							modelUsed: '',
-							provider: 'unknown',
-							latencyMs: 0,
-						},
-					});
-				}
+				await this.runAgentTask(msg.task ?? '', msg.forceIntent);
+				break;
+			}
+			case 'continueGeneration': {
+				const applied = msg.appliedFiles ?? [];
+				const continueTask = applied.length > 0
+					? `Continue the previous implementation. These files were already written: ${applied.join(', ')}. Output ONLY the remaining files or the COMPLETE remainder of any truncated file. Each block MUST start with // filename: relative/path`
+					: 'Continue the previous implementation. Output the remaining complete files. Each block MUST start with // filename: relative/path';
+				await this.runAgentTask(continueTask, 'edit');
 				break;
 			}
 			case 'executePlanStep': {
@@ -442,9 +487,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 				this.post({ type: 'chatCleared' });
 				break;
 			case 'viewDiff': {
-				const blocks = parseCodeBlocks(msg.text ?? '');
+				const rawText = stripNeuroCodeAppendix(msg.text ?? '');
+				const blocks = parseCodeBlocks(rawText, this.getApplyOptions());
 				const block = blocks[0];
 				if (!block?.filename || !folder) {
+					void vscode.window.showWarningMessage(
+						'NeuroCode: No file path found in code block. Add // filename: path as the first line.',
+					);
 					return;
 				}
 				const uri = resolveFileUri(block.filename, folder.uri.fsPath);
@@ -454,14 +503,39 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 				break;
 			}
 			case 'acceptDiff': {
-				const blocks = parseCodeBlocks(msg.text ?? '');
-				if (!folder || blocks.length === 0) {
+				if (!folder) {
 					return;
 				}
-				const result = await applyAllCodeBlocks(msg.text ?? '', folder.uri.fsPath);
+				const rawText = stripNeuroCodeAppendix(msg.text ?? '');
+				const applyOptions = this.getApplyOptions();
+				const parsed = parseCodeBlocks(rawText, applyOptions);
+				const result = await applyAllCodeBlocks(rawText, folder.uri.fsPath, applyOptions);
+
+				if (result.applied.length === 0) {
+					void vscode.window.showWarningMessage(
+						`NeuroCode: Applied 0 file(s). Found ${parsed.length} code block(s) — add // filename: src/path/file.ts as the first line inside each block.`,
+					);
+					break;
+				}
+
 				void vscode.window.showInformationMessage(
 					`NeuroCode: Applied ${result.applied.length} file(s)`,
 				);
+
+				const truncated = msg.truncated ?? this.isTruncatedResponse(rawText);
+				if (truncated) {
+					const choice = await vscode.window.showInformationMessage(
+						'Code was partially generated. Continue to finish the remaining files?',
+						'Continue',
+						'Not now',
+					);
+					if (choice === 'Continue') {
+						await this.runAgentTask(
+							`Continue the previous implementation. These files were already written: ${result.applied.map((f) => f.file).join(', ')}. Output ONLY the remaining files or the COMPLETE remainder of any truncated file. Each block MUST start with // filename: relative/path`,
+							'edit',
+						);
+					}
+				}
 				break;
 			}
 			case 'startPod':

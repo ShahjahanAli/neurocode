@@ -106,6 +106,7 @@ Your job is to WRITE CODE INTO THE PROJECT, not to write tutorials.
 Rules:
 - Output one fenced code block per file changed or created
 - Each block MUST start with: // filename: relative/path/from/project/root
+- You may also put the path in the fence tag, e.g. \`\`\`typescript:src/app/page.tsx
 - Output COMPLETE file contents — never truncate mid-function or mid-string
 - Create NEW files when the task requires them (e.g. lib/analytics/service.ts)
 - Match existing project conventions (imports, TypeScript, Next.js app router, Drizzle, etc.)

@@ -18,6 +18,7 @@ interface Message {
 	steps?: Array<{ id: string; description: string; status: string }>;
 	streaming?: boolean;
 	filesApplied?: Array<{ file: string; action: 'created' | 'updated' }>;
+	truncated?: boolean;
 }
 
 const QUICK_PROMPTS = [
@@ -139,6 +140,7 @@ export function ChatPanel() {
 						planId: msg.data.planId,
 						steps: msg.data.steps,
 						filesApplied: msg.data.filesApplied,
+						truncated: msg.data.truncated,
 					}];
 				});
 			}
@@ -293,9 +295,22 @@ export function ChatPanel() {
 								<button className="secondary" type="button" onClick={() => vscode.postMessage({ type: 'viewDiff', text: m.text })}>
 									View Diff
 								</button>
-								<button type="button" onClick={() => vscode.postMessage({ type: 'acceptDiff', text: m.text })}>
-									Accept
-								</button>
+								{(!m.filesApplied || m.filesApplied.length === 0) && (
+									<button type="button" onClick={() => vscode.postMessage({ type: 'acceptDiff', text: m.text, truncated: m.truncated })}>
+										Accept
+									</button>
+								)}
+								{m.truncated && (
+									<button
+										type="button"
+										onClick={() => vscode.postMessage({
+											type: 'continueGeneration',
+											appliedFiles: m.filesApplied?.map((f) => f.file) ?? [],
+										})}
+									>
+										Continue
+									</button>
+								)}
 							</div>
 						)}
 					</div>
