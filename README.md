@@ -33,6 +33,7 @@ Most coding assistants stuff entire repos into context or depend on 32K+ context
 
 | Feature | Description |
 |---------|-------------|
+| **Overview hub** | Activity-bar landing page: model/index/pod status, active settings, and links to every feature |
 | **Cursor-like Chat** | Natural-language chat on the **right sidebar** with Auto / Ask / Plan / Edit / Agent modes |
 | **Intent routing** | Infers explain vs plan vs implement from conversation (history-aware, not keyword-only) |
 | **Agent tool loop** | Agent mode: `read_file` → `search_code` → `write_file` → `reply` (Cursor-style) |
@@ -217,8 +218,11 @@ Set `neurocode.shard.maxTokens` to `0` for automatic budgets (3500 Ollama / 6000
 
 Sidebar panels:
 
-- **Right (default):** **Chat**
-- **Left activity bar:** **Task Queue**, **Shard Visualizer**, **Code Review**, **Project Memory**, **Debug**
+- **Left activity bar (NeuroCode icon):**
+  - **Overview** — live status, feature catalog, quick actions (start here)
+  - **Tasks**, **Shards**, **Review**, **Memory**, **Debug**
+  - **Chat** (when `neurocode.ui.chatLocation` is `left`)
+- **Right secondary sidebar (default):** **Chat** (Cursor-style)
 
 Set `neurocode.ui.chatLocation` to `left` to dock Chat with the other panels.
 

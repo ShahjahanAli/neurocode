@@ -15,6 +15,7 @@ import type { HealthData } from './sidecar/types';
 import { getConfig, getChatViewId } from './utils/config';
 import { logger } from './utils/logger';
 import { AttentionHeatmap } from './editor/AttentionHeatmap';
+import { HubPanelProvider } from './panels/HubPanel';
 import { ChatPanelProvider } from './panels/ChatPanel';
 import { ShardVisualizerProvider } from './panels/ShardVisualizerPanel';
 import { TaskQueueProvider } from './panels/TaskQueuePanel';
@@ -29,6 +30,7 @@ let statusBarItem: vscode.StatusBarItem | undefined;
 let healthPollTimer: ReturnType<typeof setInterval> | undefined;
 let podPollTimer: ReturnType<typeof setInterval> | undefined;
 let heatmap: AttentionHeatmap | undefined;
+let hubProvider: HubPanelProvider | undefined;
 let chatProvider: ChatPanelProvider | undefined;
 let shardProvider: ShardVisualizerProvider | undefined;
 let debugProvider: DebugPanelProvider | undefined;
@@ -85,6 +87,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		}
 	};
 
+	hubProvider = new HubPanelProvider(context.extensionUri, sidecarManager, () => sidecarReady);
 	chatProvider = new ChatPanelProvider(context.extensionUri, sidecarManager, heatmap, context);
 	shardProvider = new ShardVisualizerProvider(context.extensionUri);
 	debugProvider = new DebugPanelProvider(context.extensionUri);
@@ -106,6 +109,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	);
 
 	context.subscriptions.push(
+		vscode.window.registerWebviewViewProvider('neurocode.hubView', hubProvider),
 		vscode.window.registerWebviewViewProvider('neurocode.chatView', chatProvider),
 		vscode.window.registerWebviewViewProvider('neurocode.chatViewLeft', chatProvider),
 		vscode.window.registerWebviewViewProvider('neurocode.shardsView', shardProvider),
@@ -153,6 +157,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
  */
 function startAutoIndexing(sidecar: SidecarManager, context: vscode.ExtensionContext): void {
 	const onProgress = (progress: { filesProcessed: number; totalFiles: number } | null): void => {
+		hubProvider?.setIndexingProgress(progress);
 		if (!statusBarItem) {
 			return;
 		}
@@ -223,6 +228,7 @@ async function refreshHealthStatus(): Promise<void> {
 		const res = await sidecarManager.client.health(projectPath);
 		if (res.success && res.data) {
 			updateStatusBar(res.data);
+			void hubProvider?.pushStatus(res.data);
 		}
 	} catch {
 		statusBarItem.text = '$(error) NeuroCode | Sidecar unreachable';

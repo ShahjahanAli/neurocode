@@ -33,6 +33,7 @@
   "activationEvents": [
     "onStartupFinished",
     "workspaceContains:**/*",
+    "onView:neurocode.hubView",
     "onView:neurocode.chatView",
     "onView:neurocode.chatViewLeft",
     "onCommand:neurocode.askAgent",
@@ -145,6 +146,11 @@
       "neurocode-sidebar": [
         {
           "type": "webview",
+          "id": "neurocode.hubView",
+          "name": "Overview"
+        },
+        {
+          "type": "webview",
           "id": "neurocode.chatViewLeft",
           "name": "Chat",
           "when": "neurocode.chatLocation == left"
@@ -152,22 +158,22 @@
         {
           "type": "webview",
           "id": "neurocode.tasksView",
-          "name": "Task Queue"
+          "name": "Tasks"
         },
         {
           "type": "webview",
           "id": "neurocode.shardsView",
-          "name": "Shard Visualizer"
+          "name": "Shards"
         },
         {
           "type": "webview",
           "id": "neurocode.reviewView",
-          "name": "Code Review"
+          "name": "Review"
         },
         {
           "type": "webview",
           "id": "neurocode.memoryView",
-          "name": "Project Memory"
+          "name": "Memory"
         },
         {
           "type": "webview",
