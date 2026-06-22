@@ -95,6 +95,113 @@ body {
 .msg-body { line-height: 1.5; }
 .msg-body p { margin: 0.4em 0; }
 .msg-body h2, .msg-body h3 { margin: 0.6em 0 0.3em; font-size: 1em; }
+.msg-body .inline-code {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.9em;
+  background: var(--vscode-textCodeBlock-background, rgba(0,0,0,0.25));
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+.code-block-wrapper { margin: 6px 0; }
+
+.code-block-card {
+  border: 1px solid var(--nc-border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--vscode-textCodeBlock-background, #1a1a1a);
+}
+.code-block-card.streaming {
+  border-color: rgba(124, 111, 247, 0.45);
+}
+.code-block-card.collapsed .code-block-header:hover {
+  background: rgba(124, 111, 247, 0.08);
+}
+
+.code-block-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  margin: 0;
+  border: none;
+  background: var(--nc-surface);
+  color: var(--nc-text);
+  font-family: inherit;
+  font-size: 0.8em;
+  text-align: left;
+  cursor: pointer;
+}
+.code-block-header:disabled { cursor: default; }
+
+.code-block-chevron {
+  color: var(--nc-muted);
+  font-size: 0.7em;
+  width: 12px;
+  flex-shrink: 0;
+}
+.code-block-file {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-weight: 600;
+  color: var(--nc-accent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+.code-block-meta {
+  color: var(--nc-muted);
+  font-size: 0.9em;
+  flex-shrink: 0;
+}
+.code-block-streaming {
+  color: var(--nc-accent);
+  font-size: 0.85em;
+  animation: batch-pulse 1.5s ease-in-out infinite;
+  flex-shrink: 0;
+}
+.code-block-expand-hint {
+  color: var(--nc-muted);
+  font-size: 0.85em;
+  flex-shrink: 0;
+}
+
+.code-block-preview {
+  padding: 0;
+  border-top: 1px solid var(--nc-border);
+}
+.code-block-preview pre {
+  margin: 0;
+  padding: 6px 10px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.78em;
+  line-height: 1.4;
+  color: var(--nc-muted);
+  white-space: pre;
+  overflow: hidden;
+}
+.code-block-ellipsis {
+  padding: 4px 10px 8px;
+  font-size: 0.75em;
+  color: var(--nc-muted);
+  border-top: 1px dashed var(--nc-border);
+}
+
+.code-block-body {
+  margin: 0;
+  padding: 8px 10px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.8em;
+  line-height: 1.45;
+  overflow: auto;
+  border-top: 1px solid var(--nc-border);
+  white-space: pre;
+}
+.code-block-body code {
+  font-family: inherit;
+}
 
 .intent-badge { border-color: var(--nc-accent); color: var(--nc-accent); }
 .intent-chat { border-color: #4A9EFF; color: #4A9EFF; }

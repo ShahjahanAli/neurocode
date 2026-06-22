@@ -61,17 +61,33 @@ export class VLLMAdapter {
 	 * @yields {string}
 	 */
 	async *stream(messages, options = {}) {
-		const response = await axios.post(
-			`${this.baseUrl}/chat/completions`,
-			{
-				model: this.model,
-				messages,
-				max_tokens: options.max_tokens ?? 1500,
-				temperature: options.temperature ?? 0.1,
-				stream: true,
-			},
-			{ headers: this.headers, responseType: 'stream', timeout: 120_000 },
-		);
+		let response;
+		try {
+			response = await axios.post(
+				`${this.baseUrl}/chat/completions`,
+				{
+					model: this.model,
+					messages,
+					max_tokens: options.max_tokens ?? 1500,
+					temperature: options.temperature ?? 0.1,
+					stream: true,
+				},
+				{ headers: this.headers, responseType: 'stream', timeout: 120_000 },
+			);
+		} catch (err) {
+			if (axios.isAxiosError(err)) {
+				if (err.response?.status === 401) {
+					throw new Error('RunPod API key invalid — check neurocode.llm.vllmApiKey');
+				}
+				if (err.code === 'ECONNABORTED') {
+					throw new Error('RunPod vLLM request timed out — try again or reduce context size');
+				}
+				const body = err.response?.data;
+				const detail = typeof body === 'string' ? body : JSON.stringify(body ?? {});
+				throw new Error(`RunPod vLLM stream failed (${err.response?.status ?? 'network'}): ${detail.slice(0, 300)}`);
+			}
+			throw err;
+		}
 
 		let buffer = '';
 		for await (const chunk of response.data) {
@@ -94,6 +110,20 @@ export class VLLMAdapter {
 					}
 				} catch {
 					// malformed chunk — skip
+				}
+			}
+		}
+
+		if (buffer.trim()) {
+			const data = buffer.startsWith('data: ') ? buffer.slice(6).trim() : buffer.trim();
+			if (data && data !== '[DONE]') {
+				try {
+					const token = JSON.parse(data).choices?.[0]?.delta?.content;
+					if (token) {
+						yield token;
+					}
+				} catch {
+					// skip trailing partial chunk
 				}
 			}
 		}

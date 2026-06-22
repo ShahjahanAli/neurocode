@@ -1,9 +1,9 @@
 import { RunPodStatusBadge } from '../components/RunPodStatusBadge';
 import { GenomeConsentBanner } from '../components/GenomeConsentBanner';
 import { ShardCard } from '../components/ShardCard';
+import { MessageMarkdown } from '../components/MessageMarkdown';
 import { useVsCodeApi } from '../hooks/useVSCodeApi';
 import { useEffect, useRef, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
 
 type ChatIntent = 'chat' | 'plan' | 'edit';
 type ChatMode = 'auto' | 'explain' | 'plan' | 'implement' | 'agent';
@@ -298,7 +298,7 @@ export function ChatPanel() {
 							</div>
 						)}
 						<div className="msg-body">
-							<ReactMarkdown>{m.text || (m.streaming ? ' ' : '')}</ReactMarkdown>
+							<MessageMarkdown text={m.text} streaming={m.streaming} />
 							{m.streaming && <span className="typing-cursor">▋</span>}
 						</div>
 

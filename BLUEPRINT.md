@@ -19,6 +19,55 @@ RunPod pod automatically based on coding activity.
 
 ---
 
+## Chat & Agent System (v3.1)
+
+NeuroCode chat is **Cursor-aligned**: natural language in, routed behavior out.
+
+### Architecture
+
+```
+User message + mode pill
+    → Extension: ChatPanel (SSE client)
+    → Sidecar: assembleContext (shards)
+    → IntentResolver (Auto) OR forced mode
+    → Branch:
+        Ask/Edit/Plan → ChatOrchestrator (single or continued stream)
+        Agent         → AgentToolLoop (multi-step tools)
+    → Extension: auto-apply pending writes (vscode.workspace.fs)
+```
+
+### Key modules
+
+| File | Role |
+|------|------|
+| `sidecar/core/IntentResolver.js` | NLU scoring + history follow-ups |
+| `sidecar/core/ChatOrchestrator.js` | SSE chat/plan stream |
+| `sidecar/core/AgentToolLoop.js` | Agent mode tool iteration |
+| `sidecar/core/AgentTools.js` | read / search / write / reply |
+| `sidecar/core/FileReview.js` | Incomplete file detection, fix-on-check |
+| `src/panels/ChatPanel.ts` | Stream relay, auto-apply, agent loop |
+| `src/utils/DiffApplier.ts` | Parse & apply code blocks |
+| `webview-ui/.../MessageMarkdown.tsx` | Collapsible code cards |
+
+### View containers (`package.json`)
+
+```json
+"viewsContainers": {
+  "activitybar": [{ "id": "neurocode-sidebar", ... }],
+  "secondarySidebar": [{ "id": "neurocode-chat", ... }]
+}
+```
+
+Chat webview IDs: `neurocode.chatView` (right), `neurocode.chatViewLeft` (left).
+
+### SSE event types
+
+**`/agent/chat/stream`:** `intent` · `token` · `done` · `error`
+
+**`/agent/loop/stream`:** `intent` · `step` · `tool_start` · `tool_result` · `token` · `done` · `error`
+
+---
+
 ## Prerequisites
 
 ```bash

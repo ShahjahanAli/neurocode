@@ -73,13 +73,40 @@ export class SidecarClient {
 			body: body !== undefined ? JSON.stringify(body) : undefined,
 		});
 
-		if (!res.ok || !res.body) {
-			throw new Error(`SSE request failed: ${res.status}`);
+		if (!res.ok) {
+			const errText = await res.text().catch(() => '');
+			throw new Error(
+				errText ? `Sidecar stream failed (${res.status}): ${errText.slice(0, 300)}` : `SSE request failed: ${res.status}`,
+			);
+		}
+
+		if (!res.body) {
+			throw new Error('SSE request failed: empty response body');
 		}
 
 		const reader = res.body.getReader();
 		const decoder = new TextDecoder();
 		let buffer = '';
+
+		const dispatchLine = (line: string): void => {
+			if (!line.startsWith('data: ')) {
+				return;
+			}
+			const data = line.slice(6).trim();
+			if (!data || data === '[DONE]') {
+				return;
+			}
+
+			let parsed: unknown;
+			try {
+				parsed = JSON.parse(data) as unknown;
+			} catch {
+				onChunk(data);
+				return;
+			}
+
+			onChunk(parsed);
+		};
 
 		for (;;) {
 			const { done, value } = await reader.read();
@@ -92,18 +119,14 @@ export class SidecarClient {
 			buffer = lines.pop() ?? '';
 
 			for (const line of lines) {
-				if (!line.startsWith('data: ')) {
-					continue;
-				}
-				const data = line.slice(6).trim();
-				if (!data || data === '[DONE]') {
-					continue;
-				}
-				try {
-					onChunk(JSON.parse(data) as unknown);
-				} catch {
-					onChunk(data);
-				}
+				dispatchLine(line);
+			}
+		}
+
+		buffer += decoder.decode();
+		if (buffer.trim()) {
+			for (const line of buffer.split('\n')) {
+				dispatchLine(line);
 			}
 		}
 	}
@@ -160,20 +183,37 @@ export class SidecarClient {
 		onChunk: (chunk: AgentChatStreamChunk) => void,
 	): Promise<AgentChatData> {
 		let result: AgentChatData | undefined;
+		let streamedText = '';
+		let streamError: string | undefined;
 
 		await this.stream('/agent/chat/stream', (raw) => {
 			const chunk = raw as AgentChatStreamChunk;
+			if (chunk.type === 'error') {
+				streamError = chunk.message ?? 'Chat stream failed';
+				return;
+			}
 			onChunk(chunk);
+			if (chunk.type === 'token' && chunk.content) {
+				streamedText += chunk.content;
+			}
 			if (chunk.type === 'done' && chunk.data) {
 				result = chunk.data;
 			}
-			if (chunk.type === 'error') {
-				throw new Error(chunk.message ?? 'Chat stream failed');
-			}
 		}, request);
 
+		if (streamError) {
+			throw new Error(streamError);
+		}
+
 		if (!result) {
-			throw new Error('Chat stream ended without a response');
+			if (streamedText.trim()) {
+				throw new Error(
+					'Chat stream ended before completion. Partial response was received — try again or check RunPod/vLLM connectivity.',
+				);
+			}
+			throw new Error(
+				'Chat stream ended without a response. Check NeuroCode sidecar logs, RunPod vLLM URL, and API key in settings.',
+			);
 		}
 		return result;
 	}
@@ -189,20 +229,28 @@ export class SidecarClient {
 		onChunk: (chunk: AgentChatStreamChunk) => void,
 	): Promise<AgentChatData> {
 		let result: AgentChatData | undefined;
+		let streamError: string | undefined;
 
 		await this.stream('/agent/loop/stream', (raw) => {
 			const chunk = raw as AgentChatStreamChunk;
+			if (chunk.type === 'error') {
+				streamError = chunk.message ?? 'Agent loop failed';
+				return;
+			}
 			onChunk(chunk);
 			if (chunk.type === 'done' && chunk.data) {
 				result = chunk.data;
 			}
-			if (chunk.type === 'error') {
-				throw new Error(chunk.message ?? 'Agent loop failed');
-			}
 		}, request);
 
+		if (streamError) {
+			throw new Error(streamError);
+		}
+
 		if (!result) {
-			throw new Error('Agent loop ended without a response');
+			throw new Error(
+				'Agent loop ended without a response. Check sidecar logs and RunPod vLLM connectivity.',
+			);
 		}
 		return result;
 	}

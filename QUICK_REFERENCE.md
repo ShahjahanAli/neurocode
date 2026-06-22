@@ -1,5 +1,58 @@
-# NeuroCode — Quick Reference Card v3.0
+# NeuroCode — Quick Reference Card v3.1
 ## Primary: RunPod L4 24GB + Qwen3-Coder via vLLM | Fallback: Ollama
+
+---
+
+## Chat & Agent (Cursor-style)
+
+### UI layout
+
+| Panel | Location | Setting |
+|---|---|---|
+| **Chat** | Right secondary sidebar (default) | `neurocode.ui.chatLocation: right` |
+| Tasks, Shards, Review, Memory, Debug | Left activity bar | — |
+
+Reload window after changing `chatLocation`.
+
+### Chat modes (toolbar)
+
+| Mode | Sidecar behavior | Writes files? |
+|---|---|---|
+| **Auto** | `IntentResolver` + context (history, incomplete file) | If routed to edit |
+| **Ask** | Explain / review prompts | No |
+| **Plan** | JSON plan → SQLite `plans` / `plan_steps` | No |
+| **Edit** | Implement prompt + optional auto-continue | Yes if `autoApply` |
+| **Agent** | `AgentToolLoop` tool calls (max `agentToolMaxSteps`) | Yes if `autoApply` |
+
+### Agent tools (fenced `neurocode-tool` JSON block)
+
+| Tool | Args | Runs on |
+|---|---|---|
+| `read_file` | `path`, `max_chars?` | Sidecar (disk) |
+| `search_code` | `query`, `limit?` | Sidecar (vector + SQLite) |
+| `write_file` | `path`, `content` | Staged → extension applies |
+| `reply` | `message` | Terminal — ends loop |
+
+### Chat settings (defaults)
+
+| Setting | Default |
+|---|---|
+| `neurocode.ui.chatLocation` | `right` |
+| `neurocode.chat.mode` | `auto` |
+| `neurocode.chat.autoApply` | `true` |
+| `neurocode.chat.autoContinue` | `true` |
+| `neurocode.chat.maxContinueRounds` | `8` |
+| `neurocode.chat.fixOnCheck` | `true` |
+| `neurocode.chat.agentMaxSteps` | `8` (plan-step agent) |
+| `neurocode.chat.agentToolMaxSteps` | `10` (tool loop) |
+| `neurocode.indexing.autoIndex` | `true` |
+
+### Intent routing (`IntentResolver.js`)
+
+- Scores explain / plan / edit from natural language
+- Conversation follow-ups: `yes`, `go ahead`, `option 2` (not `thanks`)
+- Incomplete file + check → auto implement (`fixOnCheck`)
+- Social acks (`thanks`, `got it`) → always Ask
 
 ---
 
@@ -12,13 +65,17 @@ extension.ts                    server.js                         PRIMARY (vLLM)
 SidecarManager.ts    ──►        LLMRouter.js             ──►     RunPod L4 24GB
 SidecarClient.ts                  ├─ VLLMAdapter.js               Qwen3-Coder-AWQ
 AttentionHeatmap.ts               └─ OllamaAdapter.js    ──►     FALLBACK (Ollama)
-ChatPanel.ts                    RunPodLifecycleManager.js          localhost:11434
-ReviewPanel.ts                  ShardManager.js                    qwen2.5-coder:7b
-MemoryPanel.ts                  AgentOrchestrator.js
-DebugPanel.ts                   MultiAgentRunner.js      EMBEDDINGS (always Ollama)
-TaskQueuePanel.ts               ProjectMemoryGraph.js    ──►     nomic-embed-text
-ShardVisualizerPanel.ts         SemanticDriftDetector.js          localhost:11434
-RunPodStatusBadge.tsx           CausalDebugAgent.js
+ChatPanel.ts                    ChatOrchestrator.js
+MessageMarkdown.tsx             IntentResolver.js
+CollapsibleCodeBlock.tsx        AgentToolLoop.js
+ReviewPanel.ts                  AgentTools.js
+MemoryPanel.ts                  FileReview.js
+DebugPanel.ts                   ShardManager.js
+TaskQueuePanel.ts               RunPodLifecycleManager.js
+ShardVisualizerPanel.tsx        MultiAgentRunner.js      EMBEDDINGS (always Ollama)
+RunPodStatusBadge.tsx           ProjectMemoryGraph.js    ──►     nomic-embed-text
+                                SemanticDriftDetector.js          localhost:11434
+                                CausalDebugAgent.js
                                 CrossRepoIndexer.js
                                 EditGenomeCollector.js
                                 AirGapModeManager.js
@@ -41,7 +98,10 @@ RunPodStatusBadge.tsx           CausalDebugAgent.js
 |---|---|
 | Sidecar port | 39291 (127.0.0.1 only) |
 | Max plan steps | 8 |
-| Max LLM output tokens | 1500 |
+| Max implement output tokens | up to 4000 (vLLM budget − 500) |
+| Max agent tool steps | 10 (`agentToolMaxSteps`) |
+| Auto-continue rounds | 8 (`maxContinueRounds`) |
+| Collapse code blocks at | 5+ lines |
 | Temperature — code | 0.1 |
 | Temperature — planning | 0.3 |
 | Temperature — review | 0.5 |
@@ -123,10 +183,12 @@ Indexer
   GET  /index/status/:id    → { status, filesProcessed, totalFiles }
 
 Agent
-  POST /agent/ask           → { response, diff, shardsUsed, attentionMap,
-                                tokensUsed, budget, modelUsed, provider, latencyMs }
-  POST /agent/plan          → { planId, steps[] }
-  POST /agent/plan/:id/execute → { stepId, status, diff }
+  POST /agent/ask              → legacy single-turn (no intent routing)
+  POST /agent/chat             → orchestrated chat (intent + history)
+  POST /agent/chat/stream      → SSE: intent, token, done, error
+  POST /agent/loop/stream      → SSE: step, tool_start, tool_result, token, done
+  POST /agent/plan             → { planId, steps[] }
+  POST /agent/plan/:id/execute → { stepId, status, response, diff }
 
 Shards
   GET  /shards/preview      → { shards[], totalTokens, budget, provider }
@@ -288,5 +350,5 @@ Idle auto-stop at 30 min saves ~$10–20/month vs leaving pod running.
 
 ---
 
-*NeuroCode v3.0 — ZMS Digital Solutions, Dhaka, Bangladesh*
+*NeuroCode v3.1 — ZMS Digital Solutions, Dhaka, Bangladesh*
 *RunPod L4 24GB · Qwen3-Coder · vLLM · Ollama fallback*

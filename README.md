@@ -33,6 +33,13 @@ Most coding assistants stuff entire repos into context or depend on 32K+ context
 
 | Feature | Description |
 |---------|-------------|
+| **Cursor-like Chat** | Natural-language chat on the **right sidebar** with Auto / Ask / Plan / Edit / Agent modes |
+| **Intent routing** | Infers explain vs plan vs implement from conversation (history-aware, not keyword-only) |
+| **Agent tool loop** | Agent mode: `read_file` → `search_code` → `write_file` → `reply` (Cursor-style) |
+| **Auto-apply edits** | Implement mode writes files to the workspace when generation completes |
+| **Auto-continue** | Cursor-style batch continuation for large / truncated file outputs |
+| **Fix on check** | Checking an incomplete file auto-routes to implement and writes the fix |
+| **Collapsible code cards** | Large code blocks collapse in chat; expand to view full file |
 | **Ask Agent** | Single-turn coding tasks with shard-aware context and diff preview |
 | **Shard Visualizer** | See exactly which files were sent to the LLM and why |
 | **Task Queue** | Multi-step planner with DAG execution across up to 8 steps |
@@ -123,7 +130,19 @@ This builds the React webview UI and bundles the extension to `dist/extension.js
 2. Press **F5** to launch an **Extension Development Host**.
 3. In the new window, open a project folder.
 4. Run **NeuroCode: Index Project** from the Command Palette (`Ctrl+Shift+P`).
-5. Press **Ctrl+Shift+A** to **Ask Agent**, or open the **NeuroCode** sidebar.
+5. Press **Ctrl+Shift+A** to **Ask Agent**, or open **NeuroCode → Chat** on the **right sidebar** (Cursor-style).
+
+### Chat modes (sidebar toolbar)
+
+| Mode | What it does |
+|------|----------------|
+| **Auto** | Infers intent from natural language + conversation history (default) |
+| **Ask** | Explain, review, discuss — no file writes |
+| **Plan** | Multi-step JSON plan stored in SQLite |
+| **Edit** | Generate code and apply to the project |
+| **Agent** | Tool loop: read → search → write → reply, auto-applies files |
+
+Talk naturally — e.g. `can you check service.ts`, `yes go ahead`, `handle auth end to end`. Social replies like `thanks` stay in Ask mode (no accidental writes).
 
 ### 4. Configure (Settings → search `neurocode`)
 
@@ -156,6 +175,30 @@ This builds the React webview UI and bundles the extension to `dist/extension.js
 
 Set `neurocode.shard.maxTokens` to `0` for automatic budgets (3500 Ollama / 6000 RunPod).
 
+**Chat & agent settings:**
+
+```json
+{
+  "neurocode.ui.chatLocation": "right",
+  "neurocode.chat.mode": "auto",
+  "neurocode.chat.autoApply": true,
+  "neurocode.chat.autoContinue": true,
+  "neurocode.chat.maxContinueRounds": 8,
+  "neurocode.chat.fixOnCheck": true,
+  "neurocode.chat.agentToolMaxSteps": 10,
+  "neurocode.indexing.autoIndex": true
+}
+```
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `neurocode.ui.chatLocation` | `right` | Chat on secondary sidebar (Cursor) or `left` activity bar |
+| `neurocode.chat.mode` | `auto` | Default mode when not using toolbar pills |
+| `neurocode.chat.autoApply` | `true` | Write generated files without manual Accept |
+| `neurocode.chat.autoContinue` | `true` | Continue truncated implement output automatically |
+| `neurocode.chat.fixOnCheck` | `true` | Incomplete file + check/review → implement + write |
+| `neurocode.chat.agentToolMaxSteps` | `10` | Max tool iterations per Agent mode request |
+
 ---
 
 ## Commands & Keybindings
@@ -172,7 +215,12 @@ Set `neurocode.shard.maxTokens` to `0` for automatic budgets (3500 Ollama / 6000
 | **NeuroCode: RunPod Cost Report** | — | Session cost history |
 | **NeuroCode: Toggle Air-Gap Mode** | — | Enable offline-only operation |
 
-Sidebar panels: **Chat**, **Task Queue**, **Shard Visualizer**, **Code Review**, **Project Memory**, **Debug**.
+Sidebar panels:
+
+- **Right (default):** **Chat**
+- **Left activity bar:** **Task Queue**, **Shard Visualizer**, **Code Review**, **Project Memory**, **Debug**
+
+Set `neurocode.ui.chatLocation` to `left` to dock Chat with the other panels.
 
 ---
 
@@ -186,12 +234,14 @@ neurocode/
 │   ├── panels/          # WebView providers
 │   ├── editor/          # Attention heatmap
 │   └── sidecar/         # SidecarManager + HTTP client
+├── webview-ui/          # React sidebar UI (Vite)
+│   └── src/components/  # CollapsibleCodeBlock, MessageMarkdown, …
 ├── sidecar/             # Node.js agent server (port 39291)
 │   ├── server.js
-│   ├── core/            # ShardManager, LLMRouter, memory, review, …
-│   ├── routes/          # REST API
+│   ├── core/            # ShardManager, ChatOrchestrator, IntentResolver,
+│   │                    # AgentToolLoop, AgentTools, FileReview, …
+│   ├── routes/          # REST + SSE API
 │   └── db/              # SQLite schema
-├── webview-ui/          # React sidebar UI (Vite)
 ├── media/               # Icons and gutter assets
 ├── BLUEPRINT.md         # Full architecture guide
 ├── CURSOR_PROMPTS.md    # Step-by-step build playbook
@@ -259,7 +309,10 @@ Before publishing, ensure `sidecar/node_modules` is included in the `.vsix` (adj
 | Status bar shows **Sidecar failed** | Confirm Node.js 22.5+ is on your PATH; check **Output → NeuroCode** |
 | No semantic search / empty shards | Ensure Ollama is running and `nomic-embed-text` is pulled |
 | RunPod not connecting | Verify `vllmUrl` ends with `/v1`; test with `sidecar/scripts/test-runpod.js` |
+| **Chat stream ended without a response** | Reload extension; check RunPod URL/key; read the real error (fixed in latest build) |
+| Chat wrote files after `thanks` | Update extension — social acks no longer trigger implement |
 | Blank sidebar panels | Run `npm run compile` to build `webview-ui/dist/` |
+| Chat not on right | Set `neurocode.ui.chatLocation` to `right` and reload window |
 | Port in use | Change `neurocode.sidecar.port` (default `39291`) |
 
 ---
@@ -267,7 +320,8 @@ Before publishing, ensure `sidecar/node_modules` is included in the `.vsix` (adj
 ## Documentation
 
 - [BLUEPRINT.md](./BLUEPRINT.md) — Architecture and API contract
-- [QUICK_REFERENCE.md](./QUICK_REFERENCE.md) — Token budgets, pod states, key numbers
+- [QUICK_REFERENCE.md](./QUICK_REFERENCE.md) — Chat modes, token budgets, API, settings
+- [CHANGELOG.md](./CHANGELOG.md) — Release history
 - [CURSOR_PROMPTS.md](./CURSOR_PROMPTS.md) — Phased implementation guide
 - [.cursorrules](./.cursorrules) — Project conventions for contributors and AI agents
 
