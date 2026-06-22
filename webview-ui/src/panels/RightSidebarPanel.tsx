@@ -5,6 +5,7 @@ import { ShardVisualizerPanel } from './ShardVisualizerPanel';
 import { ReviewPanel } from './ReviewPanel';
 import { MemoryPanel } from './MemoryPanel';
 import { DebugPanel } from './DebugPanel';
+import { AnalyticsPanel } from './AnalyticsPanel';
 import { useVsCodeApi } from '../hooks/useVSCodeApi';
 import { useCallback, useEffect, useState } from 'react';
 

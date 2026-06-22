@@ -69,8 +69,11 @@ export function AnalyticsPanel({ embedded = false }: { embedded?: boolean }) {
 	const [events, setEvents] = useState<AnalyticsEvent[]>([]);
 	const [loading, setLoading] = useState(true);
 
+	const [error, setError] = useState<string | null>(null);
+
 	const refresh = (): void => {
 		setLoading(true);
+		setError(null);
 		vscode.postMessage({ type: 'requestAnalytics', hours });
 	};
 
@@ -78,7 +81,8 @@ export function AnalyticsPanel({ embedded = false }: { embedded?: boolean }) {
 		const handler = (e: MessageEvent) => {
 			if (e.data.type === 'analyticsData') {
 				setSummary(e.data.summary ?? null);
-				setEvents(e.data.events ?? []);
+				setEvents(Array.isArray(e.data.events) ? e.data.events : []);
+				setError(typeof e.data.error === 'string' ? e.data.error : null);
 				setLoading(false);
 			}
 			if (e.data.type === 'analyticsRefresh') {
@@ -109,8 +113,18 @@ export function AnalyticsPanel({ embedded = false }: { embedded?: boolean }) {
 				</div>
 			</div>
 
-			{loading && !summary && (
+			{loading && !summary && !error && (
 				<p style={{ color: 'var(--nc-muted)' }}>Loading analytics…</p>
+			)}
+
+			{error && (
+				<div className="analytics-warn">{error}</div>
+			)}
+
+			{!loading && !summary && !error && (
+				<p style={{ color: 'var(--nc-muted)', fontSize: '0.85em' }}>
+					No analytics yet. Use Chat to generate usage data, then refresh.
+				</p>
 			)}
 
 			{summary && (
@@ -152,7 +166,7 @@ export function AnalyticsPanel({ embedded = false }: { embedded?: boolean }) {
 						<div className="analytics-warn">{summary.failedCalls} failed call(s) in this period</div>
 					)}
 
-					{summary.byIntent.length > 0 && (
+					{(summary.byIntent?.length ?? 0) > 0 && (
 						<section className="analytics-section">
 							<h4 className="hub-section-title">By intent</h4>
 							<div className="analytics-table-wrap">
@@ -167,7 +181,7 @@ export function AnalyticsPanel({ embedded = false }: { embedded?: boolean }) {
 										</tr>
 									</thead>
 									<tbody>
-										{summary.byIntent.map((row) => (
+										{(summary.byIntent ?? []).map((row) => (
 											<tr key={row.intent}>
 												<td>{row.intent}</td>
 												<td>{row.calls}</td>
@@ -182,11 +196,11 @@ export function AnalyticsPanel({ embedded = false }: { embedded?: boolean }) {
 						</section>
 					)}
 
-					{summary.byProvider.length > 0 && (
+					{(summary.byProvider?.length ?? 0) > 0 && (
 						<section className="analytics-section">
 							<h4 className="hub-section-title">By provider</h4>
 							<ul className="hub-activity-list">
-								{summary.byProvider.map((row) => (
+								{(summary.byProvider ?? []).map((row) => (
 									<li key={row.provider}>
 										<strong>{row.provider}</strong> — {row.calls} calls, {formatTokens(row.tokens_output)} output tokens
 									</li>

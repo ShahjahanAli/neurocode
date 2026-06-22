@@ -26,15 +26,34 @@ export class AnalyticsPanelProvider implements vscode.WebviewViewProvider {
 				return;
 			}
 			const hours = msg.hours ?? 24;
-			const [summaryRes, recentRes] = await Promise.all([
-				this.sidecar.client.get(`/analytics/summary?hours=${hours}`),
-				this.sidecar.client.get('/analytics/recent?limit=25'),
-			]);
-			this.post({
-				type: 'analyticsData',
-				summary: summaryRes.data,
-				events: (recentRes.data as { events?: unknown[] } | undefined)?.events ?? [],
-			});
+			try {
+				const [summaryRes, recentRes] = await Promise.all([
+					this.sidecar.client.get(`/analytics/summary?hours=${hours}`),
+					this.sidecar.client.get('/analytics/recent?limit=25'),
+				]);
+				if (!summaryRes.success) {
+					this.post({
+						type: 'analyticsData',
+						summary: null,
+						events: [],
+						error: summaryRes.error ?? 'Analytics unavailable',
+					});
+					return;
+				}
+				this.post({
+					type: 'analyticsData',
+					summary: summaryRes.data,
+					events: (recentRes.data as { events?: unknown[] } | undefined)?.events ?? [],
+				});
+			} catch (err) {
+				const errText = err instanceof Error ? err.message : String(err);
+				this.post({
+					type: 'analyticsData',
+					summary: null,
+					events: [],
+					error: errText,
+				});
+			}
 		});
 	}
 
