@@ -13,6 +13,7 @@ import { EditGenomeCollector } from './genome/EditGenomeCollector.js';
 import { AirGapModeManager } from './core/AirGapModeManager.js';
 import { services } from './core/services.js';
 import { countProjectFiles } from './core/pathUtils.js';
+import { AnalyticsCollector } from './core/AnalyticsCollector.js';
 import { mountRoutes } from './routes/index.js';
 
 const PORT = parseInt(process.env.NEUROCODE_PORT || '39291', 10);
@@ -82,6 +83,7 @@ app.get('/health', async (req, res) => {
 const db = getDb(PROJECT_PATH);
 services.db = db;
 services.projectPath = PROJECT_PATH;
+services.analytics = new AnalyticsCollector(db);
 
 const vectorStore = new VectorStore();
 const vectorPath = path.join(PROJECT_PATH || process.cwd(), '.neurocode', 'vectors');

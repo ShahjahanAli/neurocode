@@ -117,6 +117,44 @@ CREATE TABLE IF NOT EXISTS runpod_sessions (
   tokens_generated INTEGER DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS analytics_events (
+  id TEXT PRIMARY KEY,
+  event_type TEXT NOT NULL,
+  intent TEXT,
+  chat_mode TEXT,
+  provider TEXT,
+  model_used TEXT,
+  tokens_context INTEGER DEFAULT 0,
+  tokens_output INTEGER DEFAULT 0,
+  latency_ms INTEGER DEFAULT 0,
+  shard_count INTEGER DEFAULT 0,
+  tool_steps INTEGER DEFAULT 0,
+  success INTEGER DEFAULT 1,
+  error TEXT,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS developer_feedback (
+  id TEXT PRIMARY KEY,
+  rating TEXT NOT NULL,
+  comment TEXT,
+  message_id TEXT,
+  task_preview TEXT,
+  response_preview TEXT,
+  intent TEXT,
+  provider TEXT,
+  model_used TEXT,
+  tokens_used INTEGER DEFAULT 0,
+  latency_ms INTEGER DEFAULT 0,
+  diagnostics TEXT,
+  created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_analytics_created ON analytics_events(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_analytics_intent ON analytics_events(intent);
+CREATE INDEX IF NOT EXISTS idx_feedback_created ON developer_feedback(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_feedback_rating ON developer_feedback(rating);
+
 CREATE INDEX IF NOT EXISTS idx_files_path ON files(path);
 CREATE INDEX IF NOT EXISTS idx_symbols_file ON symbols(file_id);
 CREATE INDEX IF NOT EXISTS idx_deps_from ON dependencies(from_file_id);

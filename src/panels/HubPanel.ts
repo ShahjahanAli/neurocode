@@ -137,6 +137,7 @@ export class HubPanelProvider implements vscode.WebviewViewProvider {
 				review: 'review',
 				memory: 'memory',
 				debug: 'debug',
+				analytics: 'analytics',
 			};
 			const tab = tabMap[panel];
 			if (tab) {

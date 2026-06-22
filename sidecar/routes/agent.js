@@ -4,6 +4,7 @@ import { LLMRouter } from '../core/LLMRouter.js';
 import { services } from '../core/services.js';
 import { runOrchestratedChat, streamOrchestratedChat } from '../core/ChatOrchestrator.js';
 import { streamAgentToolLoop } from '../core/AgentToolLoop.js';
+import { recordAnalyticsEvent } from '../core/AnalyticsCollector.js';
 
 const router = Router();
 
@@ -84,6 +85,17 @@ router.post('/ask', async (req, res) => {
 			latencyMs,
 			provider,
 			modelClass: modelInfo.name,
+		});
+
+		recordAnalyticsEvent(services, {
+			eventType: 'ask',
+			intent: 'edit',
+			provider,
+			modelUsed: modelInfo.name,
+			tokensContext: totalTokens,
+			responseText: response,
+			latencyMs,
+			shardCount: shards.length,
 		});
 
 		res.json({

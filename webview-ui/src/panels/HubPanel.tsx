@@ -137,6 +137,12 @@ const FEATURE_SECTIONS: Array<{ title: string; items: FeatureCard[] }> = [
 				command: 'neurocode.startPod',
 			},
 			{
+				id: 'analytics',
+				title: 'Analytics',
+				description: 'Token usage, latency, LLM calls, and feedback summary for this project.',
+				panel: 'analytics',
+			},
+			{
 				id: 'cost',
 				title: 'Cost Report',
 				description: 'Session minutes, LLM calls, and estimated RunPod spend.',

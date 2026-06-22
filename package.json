@@ -177,6 +177,11 @@
         },
         {
           "type": "webview",
+          "id": "neurocode.analyticsView",
+          "name": "Analytics"
+        },
+        {
+          "type": "webview",
           "id": "neurocode.debugView",
           "name": "Debug"
         }
@@ -376,6 +381,11 @@
           "enum": ["right", "left"],
           "default": "right",
           "description": "Where the Chat panel opens: right secondary sidebar (Cursor-style) or left activity bar with other NeuroCode views."
+        },
+        "neurocode.feedback.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show thumbs up/down feedback on chat responses (stored locally to improve NeuroCode)."
         }
       }
     }

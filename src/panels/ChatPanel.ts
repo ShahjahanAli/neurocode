@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { randomUUID } from 'crypto';
 import type { SidecarManager } from '../sidecar/SidecarManager';
 import type { AttentionHeatmap } from '../editor/AttentionHeatmap';
 import { getWebviewHtml } from './webviewUtils';
@@ -15,6 +16,10 @@ export let lastAgentResponse: AgentChatData | null = null;
 interface StoredChatMessage {
 	role: 'user' | 'assistant';
 	text: string;
+	messageId?: string;
+	taskText?: string;
+	tokensUsed?: number;
+	latencyMs?: number;
 	provider?: string;
 	modelUsed?: string;
 	intent?: ChatIntent;
@@ -23,6 +28,7 @@ interface StoredChatMessage {
 	steps?: Array<{ id: string; description: string; status: string }>;
 	filesApplied?: Array<{ file: string; action: 'created' | 'updated' }>;
 	truncated?: boolean;
+	feedbackRating?: 'positive' | 'negative';
 	/** Raw LLM output before NeuroCode status footers (used for Apply). */
 	sourceText?: string;
 }
@@ -216,6 +222,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 				role: m.role,
 				text: m.text,
 				sourceText: m.sourceText,
+				messageId: m.messageId,
+				taskText: m.taskText,
+				tokensUsed: m.tokensUsed,
+				latencyMs: m.latencyMs,
 				provider: m.provider,
 				modelUsed: m.modelUsed,
 				intent: m.intent,
@@ -224,6 +234,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 				steps: m.steps,
 				filesApplied: m.filesApplied,
 				truncated: m.truncated,
+				feedbackRating: m.feedbackRating,
 			})),
 		});
 	}
@@ -558,10 +569,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 				);
 			}
 
+			const messageId = randomUUID();
 			this.appendStoredMessage({
 				role: 'assistant',
 				text: finalData.response,
 				sourceText: rawData.response,
+				messageId,
+				taskText: task,
+				tokensUsed: finalData.tokensUsed,
+				latencyMs: finalData.latencyMs,
 				provider: finalData.provider,
 				modelUsed: finalData.modelUsed,
 				intent: finalData.intent,
@@ -576,11 +592,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 			this.heatmap.apply(finalData.attentionMap, editor?.document.uri.fsPath);
 			this.broadcastShards(finalData);
 
-			this.post({
-				type: 'agentResponse',
-				data: finalData,
-				sourceText: rawData.response,
-			});
+			this.postAgentResponse(finalData, rawData.response, messageId);
 
 			void this.sidecar.client.post('/memory/record', {
 				taskDescription: task,
@@ -603,9 +615,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 				text: `**Error:** ${errText}`,
 				intent: 'chat',
 			});
-			this.post({
-				type: 'agentResponse',
-				data: {
+			this.postAgentResponse({
 					response: `**Error:** ${errText}`,
 					intent: 'chat',
 					shardsUsed: [],
@@ -614,8 +624,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 					modelUsed: '',
 					provider: 'unknown',
 					latencyMs: 0,
-				},
-			});
+				});
 		}
 	}
 
@@ -931,6 +940,25 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 	}
 
 	/**
+	 * Posts a completed assistant response with analytics metadata and feedback id.
+	 * @param data - Agent response payload.
+	 * @param sourceText - Raw model output before footers.
+	 * @param messageId - Stable id for feedback (generated if omitted).
+	 */
+	private postAgentResponse(data: AgentChatData, sourceText?: string, messageId?: string): void {
+		const lastUser = [...this.uiMessages].reverse().find((m) => m.role === 'user');
+		const id = messageId ?? randomUUID();
+		this.post({
+			type: 'agentResponse',
+			messageId: id,
+			taskText: lastUser?.text,
+			data,
+			sourceText: sourceText ?? data.response,
+		});
+		this.post({ type: 'analyticsRefresh' });
+	}
+
+	/**
 	 * Posts shard visualizer data to this webview (right panel Shards tab).
 	 * @param data - Agent response containing shard metadata.
 	 */
@@ -972,6 +1000,58 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 		}
 
 		switch (msg.type) {
+			case 'requestAnalytics': {
+				const hours = (msg as { hours?: number }).hours ?? 24;
+				const [summaryRes, recentRes] = await Promise.all([
+					this.sidecar.client.get(`/analytics/summary?hours=${hours}`),
+					this.sidecar.client.get('/analytics/recent?limit=25'),
+				]);
+				this.post({
+					type: 'analyticsData',
+					summary: summaryRes.data,
+					events: (recentRes.data as { events?: unknown[] } | undefined)?.events ?? [],
+				});
+				break;
+			}
+			case 'submitFeedback': {
+				if (!getConfig().feedback.enabled) {
+					break;
+				}
+				const body = msg as {
+					messageId?: string;
+					rating?: string;
+					comment?: string;
+					taskPreview?: string;
+					responsePreview?: string;
+					intent?: string;
+					provider?: string;
+					modelUsed?: string;
+					tokensUsed?: number;
+					latencyMs?: number;
+					diagnostics?: unknown;
+				};
+				if (!body.rating || !['positive', 'negative'].includes(body.rating)) {
+					break;
+				}
+				await this.sidecar.client.post('/analytics/feedback', body);
+				if (body.messageId) {
+					const stored = this.uiMessages.find((m) => m.messageId === body.messageId);
+					if (stored) {
+						stored.feedbackRating = body.rating as 'positive' | 'negative';
+						this.persistChat();
+					}
+					this.post({
+						type: 'feedbackSaved',
+						messageId: body.messageId,
+						rating: body.rating,
+					});
+				}
+				void vscode.window.setStatusBarMessage(
+					'NeuroCode: Thanks for your feedback',
+					3000,
+				);
+				break;
+			}
 			case 'requestStatus':
 				await this.pushHubStatus();
 				break;
@@ -988,6 +1068,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 						review: 'review',
 						memory: 'memory',
 						debug: 'debug',
+						analytics: 'analytics',
 					};
 					const tab = tabMap[panel];
 					if (tab) {
@@ -1127,18 +1208,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 						provider: res.data.provider,
 					};
 					this.appendStoredMessage(completeMsg);
-					this.post({
-						type: 'agentResponse',
-						data: {
-							response: completeMsg.text,
-							intent: 'chat',
-							shardsUsed: [],
-							tokensUsed: 0,
-							budget: 0,
-							modelUsed: '',
-							provider: res.data.provider ?? 'unknown',
-							latencyMs: 0,
-						},
+					this.postAgentResponse({
+						response: completeMsg.text,
+						intent: 'chat',
+						shardsUsed: [],
+						tokensUsed: 0,
+						budget: 0,
+						modelUsed: '',
+						provider: res.data.provider ?? 'unknown',
+						latencyMs: 0,
 					});
 					break;
 				}
@@ -1149,12 +1227,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 						: `Step **${res.data.stepId}** completed.`);
 				const stepText = `Implemented **${res.data.stepId}**:\n\n${stepResponse}`;
 
+				const stepMessageId = randomUUID();
 				this.appendStoredMessage({
 					role: 'assistant',
 					text: stepText,
 					intent: 'edit',
 					provider: res.data.provider,
 					shards: res.data.shardsUsed,
+					messageId: stepMessageId,
+					tokensUsed: res.data.tokensUsed ?? 0,
 				});
 
 				const stepData: AgentChatData = {
@@ -1171,10 +1252,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 				lastAgentResponse = stepData;
 				this.broadcastShards(stepData);
 
-				this.post({
-					type: 'agentResponse',
-					data: stepData,
-				});
+				this.postAgentResponse(stepData, stepText, stepMessageId);
 				break;
 			}
 			case 'clearChat':

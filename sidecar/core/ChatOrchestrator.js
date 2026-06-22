@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import { LLMRouter } from './LLMRouter.js';
 import { getPrimaryReviewShard } from './FileReview.js';
 import { resolveUserIntent } from './IntentResolver.js';
+import { recordAnalyticsEvent } from './AnalyticsCollector.js';
 
 /** @typedef {'chat' | 'plan' | 'edit'} ChatIntent */
 /** @typedef {'auto' | 'explain' | 'plan' | 'implement' | 'agent'} ChatMode */
@@ -268,6 +269,18 @@ export async function runOrchestratedChat(services, params) {
 		modelClass: modelInfo.name,
 	});
 
+	recordAnalyticsEvent(services, {
+		eventType: agentic ? 'agent' : effectiveIntent,
+		intent: effectiveIntent,
+		chatMode,
+		provider,
+		modelUsed: modelInfo.name,
+		tokensContext: totalTokens,
+		responseText: response,
+		latencyMs,
+		shardCount: shards.length,
+	});
+
 	return {
 		response,
 		intent: effectiveIntent,
@@ -386,6 +399,18 @@ export async function streamOrchestratedChat(services, params, write) {
 		const attentionMap = services.shardManager.buildAttentionMap(shards, response);
 		const latencyMs = Date.now() - startTime;
 
+		recordAnalyticsEvent(services, {
+			eventType: agentic ? 'agent' : effectiveIntent,
+			intent: effectiveIntent,
+			chatMode,
+			provider,
+			modelUsed: modelInfo.name,
+			tokensContext: totalTokens,
+			responseText: response,
+			latencyMs,
+			shardCount: shards.length,
+		});
+
 		write({
 			type: 'done',
 			data: {
@@ -411,6 +436,13 @@ export async function streamOrchestratedChat(services, params, write) {
 			},
 		});
 	} catch (err) {
+		recordAnalyticsEvent(services, {
+			eventType: 'chat',
+			chatMode,
+			success: false,
+			error: err instanceof Error ? err.message : String(err),
+			latencyMs: 0,
+		});
 		write({
 			type: 'error',
 			message: err instanceof Error ? err.message : String(err),

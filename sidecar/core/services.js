@@ -8,5 +8,6 @@ export const services = {
 	crossRepoIndexer: null,
 	driftDetector: null,
 	genomeCollector: null,
+	analytics: null,
 	projectPath: '',
 };

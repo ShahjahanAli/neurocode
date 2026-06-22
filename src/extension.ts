@@ -21,6 +21,7 @@ import { ShardVisualizerProvider } from './panels/ShardVisualizerPanel';
 import { TaskQueueProvider } from './panels/TaskQueuePanel';
 import { ReviewPanelProvider } from './panels/ReviewPanel';
 import { MemoryPanelProvider } from './panels/MemoryPanel';
+import { AnalyticsPanelProvider } from './panels/AnalyticsPanelProvider';
 import { DebugPanelProvider } from './panels/DebugPanel';
 import { AutoIndexer } from './services/AutoIndexer';
 
@@ -130,6 +131,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		vscode.window.registerWebviewViewProvider('neurocode.tasksView', new TaskQueueProvider(context.extensionUri, sidecarManager)),
 		vscode.window.registerWebviewViewProvider('neurocode.reviewView', new ReviewPanelProvider(context.extensionUri, sidecarManager)),
 		vscode.window.registerWebviewViewProvider('neurocode.memoryView', new MemoryPanelProvider(context.extensionUri, sidecarManager)),
+		vscode.window.registerWebviewViewProvider('neurocode.analyticsView', new AnalyticsPanelProvider(context.extensionUri, sidecarManager)),
 		vscode.window.registerWebviewViewProvider('neurocode.debugView', debugProvider),
 	);
 

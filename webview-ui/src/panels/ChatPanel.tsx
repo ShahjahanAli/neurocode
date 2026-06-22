@@ -1,3 +1,4 @@
+import { MessageFeedback } from '../components/MessageFeedback';
 import { RunPodStatusBadge } from '../components/RunPodStatusBadge';
 import { GenomeConsentBanner } from '../components/GenomeConsentBanner';
 import { ShardCard } from '../components/ShardCard';
@@ -11,6 +12,10 @@ type ChatMode = 'auto' | 'explain' | 'plan' | 'implement' | 'agent';
 interface Message {
 	role: 'user' | 'assistant';
 	text: string;
+	messageId?: string;
+	taskText?: string;
+	tokensUsed?: number;
+	latencyMs?: number;
 	provider?: string;
 	modelUsed?: string;
 	intent?: ChatIntent;
@@ -22,6 +27,7 @@ interface Message {
 	filesApplied?: Array<{ file: string; action: 'created' | 'updated' }>;
 	truncated?: boolean;
 	sourceText?: string;
+	feedbackRating?: 'positive' | 'negative';
 }
 
 const QUICK_PROMPTS = [
@@ -166,9 +172,14 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean }) {
 				setBatchProgress(null);
 				setMessages((m) => {
 					const withoutStream = m.filter((x) => !x.streaming);
+					const lastUser = [...withoutStream].reverse().find((x) => x.role === 'user');
 					return [...withoutStream, {
 						role: 'assistant',
 						text: msg.data.response,
+						messageId: msg.messageId,
+						taskText: msg.taskText ?? lastUser?.text,
+						tokensUsed: msg.data.tokensUsed,
+						latencyMs: msg.data.latencyMs,
 						provider: msg.data.provider,
 						modelUsed: msg.data.modelUsed,
 						intent: msg.data.intent,
@@ -181,6 +192,13 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean }) {
 						sourceText: msg.sourceText ?? msg.data.response,
 					}];
 				});
+			}
+			if (msg.type === 'feedbackSaved' && msg.messageId) {
+				setMessages((m) => m.map((x) => (
+					x.messageId === msg.messageId
+						? { ...x, feedbackRating: msg.rating }
+						: x
+				)));
 			}
 			if (msg.type === 'error') {
 				setLoading(false);
@@ -200,6 +218,9 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean }) {
 				setMessages([]);
 			}
 			if (msg.type === 'genomeConsent') setGenomeConsent(msg.accepted);
+			if (msg.type === 'analyticsRefresh') {
+				vscode.postMessage({ type: 'requestAnalytics', hours: 24 });
+			}
 		};
 		window.addEventListener('message', handler);
 		return () => window.removeEventListener('message', handler);
@@ -295,6 +316,12 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean }) {
 										{badgeLabel(m)}
 									</span>
 								)}
+								{m.tokensUsed != null && m.tokensUsed > 0 && (
+									<span className="badge metrics-badge">{m.tokensUsed} ctx tok</span>
+								)}
+								{m.latencyMs != null && m.latencyMs > 0 && (
+									<span className="badge metrics-badge">{(m.latencyMs / 1000).toFixed(1)}s</span>
+								)}
 							</div>
 						)}
 						<div className="msg-body">
@@ -328,6 +355,21 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean }) {
 									))}
 								</ul>
 							</div>
+						)}
+
+						{m.role === 'assistant' && !m.streaming && !loading && m.messageId && (
+							<MessageFeedback
+								messageId={m.messageId}
+								taskPreview={m.taskText}
+								responsePreview={m.sourceText ?? m.text}
+								intent={m.intent}
+								provider={m.provider}
+								modelUsed={m.modelUsed}
+								tokensUsed={m.tokensUsed}
+								latencyMs={m.latencyMs}
+								shards={m.shards}
+								initialRating={m.feedbackRating}
+							/>
 						)}
 
 						{m.planId && !loading && !m.agentic && (

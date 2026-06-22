@@ -1,5 +1,6 @@
 import { LLMRouter } from './LLMRouter.js';
 import { trimHistory } from './ChatOrchestrator.js';
+import { recordAnalyticsEvent } from './AnalyticsCollector.js';
 import { executeAgentTool, AGENT_TOOL_NAMES } from './AgentTools.js';
 
 const AGENT_SYSTEM = `You are NeuroCode Agent — an autonomous coding assistant inside VS Code (like Cursor Agent).
@@ -228,6 +229,19 @@ export async function streamAgentToolLoop(services, params, write) {
 		}
 
 		const latencyMs = Date.now() - startTime;
+
+		recordAnalyticsEvent(services, {
+			eventType: 'agent',
+			intent: 'edit',
+			chatMode: 'agent',
+			provider,
+			modelUsed: modelInfo.name,
+			tokensContext: totalTokens,
+			responseText: finalReply,
+			latencyMs,
+			shardCount: shards.length,
+			toolSteps: toolLog.length,
+		});
 
 		write({
 			type: 'done',

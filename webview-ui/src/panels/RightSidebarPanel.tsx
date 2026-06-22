@@ -8,11 +8,12 @@ import { DebugPanel } from './DebugPanel';
 import { useVsCodeApi } from '../hooks/useVSCodeApi';
 import { useCallback, useEffect, useState } from 'react';
 
-export type RightTab = 'overview' | 'chat' | 'tasks' | 'shards' | 'review' | 'memory' | 'debug';
+export type RightTab = 'overview' | 'chat' | 'tasks' | 'shards' | 'review' | 'memory' | 'debug' | 'analytics';
 
 const TABS: Array<{ id: RightTab; label: string; primary?: boolean }> = [
 	{ id: 'overview', label: 'Overview', primary: true },
 	{ id: 'chat', label: 'Chat', primary: true },
+	{ id: 'analytics', label: 'Analytics', primary: true },
 	{ id: 'tasks', label: 'Tasks', primary: true },
 	{ id: 'shards', label: 'Shards', primary: true },
 	{ id: 'review', label: 'Review', primary: true },
@@ -27,6 +28,7 @@ const PANEL_TO_TAB: Record<string, RightTab> = {
 	review: 'review',
 	memory: 'memory',
 	debug: 'debug',
+	analytics: 'analytics',
 };
 
 /**
@@ -48,6 +50,9 @@ export function RightSidebarPanel() {
 		}
 		if (next === 'memory') {
 			vscode.postMessage({ type: 'refreshMemories' });
+		}
+		if (next === 'analytics') {
+			vscode.postMessage({ type: 'requestAnalytics', hours: 24 });
 		}
 	}, [vscode]);
 
@@ -97,6 +102,7 @@ export function RightSidebarPanel() {
 				{tab === 'review' && <ReviewPanel embedded />}
 				{tab === 'memory' && <MemoryPanel embedded />}
 				{tab === 'debug' && <DebugPanel embedded />}
+				{tab === 'analytics' && <AnalyticsPanel embedded />}
 			</div>
 		</div>
 	);
