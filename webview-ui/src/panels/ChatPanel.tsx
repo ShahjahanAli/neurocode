@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 
 type ChatIntent = 'chat' | 'plan' | 'edit';
+type ChatMode = 'auto' | 'explain' | 'plan' | 'implement' | 'agent';
 
 interface Message {
 	role: 'user' | 'assistant';
@@ -13,6 +14,7 @@ interface Message {
 	provider?: string;
 	modelUsed?: string;
 	intent?: ChatIntent;
+	agentic?: boolean;
 	shards?: Array<{ file: string; reason: string; tokenCount: number }>;
 	planId?: string;
 	steps?: Array<{ id: string; description: string; status: string }>;
@@ -23,11 +25,19 @@ interface Message {
 }
 
 const QUICK_PROMPTS = [
-	{ label: 'Check open file', task: 'Can you check the file I have open — what is done and what is still missing?', intent: 'chat' as ChatIntent },
-	{ label: 'Explain this file', task: 'Explain the file I have open — what does it do and how is it structured?', intent: 'chat' as ChatIntent },
-	{ label: 'What should I do next?', task: 'Based on this project, what should I work on next?', intent: 'chat' as ChatIntent },
-	{ label: 'Plan a feature', task: 'Plan how to add user authentication to this project', intent: 'plan' as ChatIntent },
-	{ label: 'Review for issues', task: 'Review the open file for bugs, security, and UX issues', intent: 'chat' as ChatIntent },
+	{ label: 'Check open file', task: 'Can you check the file I have open — what is done and what is still missing?' },
+	{ label: 'Explain this file', task: 'Explain the file I have open — what does it do and how is it structured?' },
+	{ label: 'What should I do next?', task: 'Based on this project, what should I work on next?' },
+	{ label: 'Plan a feature', task: 'Plan how to add user authentication to this project', mode: 'plan' as ChatMode },
+	{ label: 'Review for issues', task: 'Review the open file for bugs, security, and UX issues' },
+];
+
+const CHAT_MODES: Array<{ id: ChatMode; label: string; hint: string }> = [
+	{ id: 'auto', label: 'Auto', hint: 'Infer intent from your message (Cursor-style)' },
+	{ id: 'explain', label: 'Ask', hint: 'Explain, review, discuss — no code writes' },
+	{ id: 'plan', label: 'Plan', hint: 'Break work into steps' },
+	{ id: 'implement', label: 'Edit', hint: 'Write code to the project' },
+	{ id: 'agent', label: 'Agent', hint: 'Plan + auto-execute steps' },
 ];
 
 const INTENT_LABELS: Record<ChatIntent, string> = {
@@ -41,7 +51,9 @@ export function ChatPanel() {
 	const [messages, setMessages] = useState<Message[]>([]);
 	const [input, setInput] = useState('');
 	const [loading, setLoading] = useState(false);
+	const [chatMode, setChatMode] = useState<ChatMode>('auto');
 	const [streamIntent, setStreamIntent] = useState<ChatIntent | null>(null);
+	const [streamAgentic, setStreamAgentic] = useState(false);
 	const [podState, setPodState] = useState('not-configured');
 	const [idleRemainingMs, setIdleRemainingMs] = useState<number | undefined>();
 	const [cost, setCost] = useState<{ estimatedCostUsd?: number; sessionMinutes?: number; llmCalls?: number }>();
@@ -117,16 +129,22 @@ export function ChatPanel() {
 			if (msg.type === 'streamStart') {
 				setLoading(true);
 				setStreamIntent(null);
+				setStreamAgentic(false);
 				stickToBottomRef.current = true;
 				setMessages((m) => [...m, { role: 'assistant', text: '', streaming: true }]);
 			}
 			if (msg.type === 'streamIntent') {
 				setStreamIntent(msg.intent);
+				setStreamAgentic(Boolean(msg.agentic));
 				setMessages((m) => {
 					const copy = [...m];
 					const last = copy[copy.length - 1];
 					if (last?.streaming) {
-						copy[copy.length - 1] = { ...last, intent: msg.intent };
+						copy[copy.length - 1] = {
+							...last,
+							intent: msg.intent,
+							agentic: msg.agentic,
+						};
 					}
 					return copy;
 				});
@@ -144,6 +162,7 @@ export function ChatPanel() {
 			if (msg.type === 'agentResponse') {
 				setLoading(false);
 				setStreamIntent(null);
+				setStreamAgentic(false);
 				setBatchProgress(null);
 				setMessages((m) => {
 					const withoutStream = m.filter((x) => !x.streaming);
@@ -153,6 +172,7 @@ export function ChatPanel() {
 						provider: msg.data.provider,
 						modelUsed: msg.data.modelUsed,
 						intent: msg.data.intent,
+						agentic: msg.data.agentic,
 						shards: msg.data.shardsUsed,
 						planId: msg.data.planId,
 						steps: msg.data.steps,
@@ -165,6 +185,7 @@ export function ChatPanel() {
 			if (msg.type === 'error') {
 				setLoading(false);
 				setStreamIntent(null);
+				setStreamAgentic(false);
 				setBatchProgress(null);
 				setMessages((m) => {
 					const withoutStream = m.filter((x) => !x.streaming);
@@ -188,15 +209,14 @@ export function ChatPanel() {
 		if (!stickToBottomRef.current) {
 			return;
 		}
-		// Instant scroll during streaming avoids fighting manual scroll gestures.
 		const behavior: ScrollBehavior = loading ? 'auto' : 'smooth';
 		requestAnimationFrame(() => scrollToBottom(behavior));
 	}, [messages, loading]);
 
-	const send = (task: string, forceIntent?: ChatIntent) => {
+	const send = (task: string, mode?: ChatMode) => {
 		if (!task.trim() || loading) return;
 		stickToBottomRef.current = true;
-		vscode.postMessage({ type: 'askAgent', task, forceIntent });
+		vscode.postMessage({ type: 'askAgent', task, chatMode: mode ?? chatMode });
 		setInput('');
 	};
 
@@ -204,6 +224,12 @@ export function ChatPanel() {
 		if (p === 'ollama') return `Ollama · ${model ?? 'local'}`;
 		if (p === 'vllm') return 'Qwen · RunPod';
 		return model ?? 'NeuroCode';
+	};
+
+	const badgeLabel = (m: Message): string => {
+		if (m.agentic || (m.streaming && streamAgentic)) return 'Agent';
+		const intent = m.intent ?? streamIntent ?? 'chat';
+		return INTENT_LABELS[intent];
 	};
 
 	return (
@@ -237,11 +263,11 @@ export function ChatPanel() {
 				{messages.length === 0 && (
 					<div className="welcome-card">
 						<h3>NeuroCode Chat</h3>
-						<p>Ask questions, get plans, or request code changes — like Cursor.</p>
+						<p>Talk naturally — NeuroCode figures out whether to explain, plan, or write code.</p>
 						<ul className="welcome-tips">
-							<li><strong>Ask anything</strong> — &quot;check the landing page&quot;, &quot;what does this do?&quot;</li>
-							<li><strong>Plan work</strong> — &quot;plan a JWT migration&quot;</li>
-							<li><strong>Edit code</strong> — &quot;add email validation to signup&quot;</li>
+							<li><strong>Auto</strong> — &quot;check service.ts&quot;, &quot;this looks broken&quot;, &quot;yes go ahead&quot;</li>
+							<li><strong>Plan</strong> — &quot;how should we migrate auth to JWT?&quot;</li>
+							<li><strong>Agent</strong> — &quot;handle the full analytics feature end to end&quot;</li>
 						</ul>
 						<div className="quick-prompts">
 							{QUICK_PROMPTS.map((q) => (
@@ -249,7 +275,7 @@ export function ChatPanel() {
 									key={q.label}
 									className="quick-prompt"
 									type="button"
-									onClick={() => send(q.task, q.intent)}
+									onClick={() => send(q.task, q.mode)}
 									disabled={loading}
 								>
 									{q.label}
@@ -264,9 +290,9 @@ export function ChatPanel() {
 						{m.role === 'assistant' && (
 							<div className="msg-meta">
 								<span className="badge">{providerLabel(m.provider, m.modelUsed)}</span>
-								{(m.intent || streamIntent) && (
-									<span className={`badge intent-badge intent-${m.intent ?? streamIntent}`}>
-										{INTENT_LABELS[m.intent ?? streamIntent ?? 'chat']}
+								{(m.intent || streamIntent || m.agentic || streamAgentic) && (
+									<span className={`badge intent-badge intent-${m.agentic ? 'agent' : (m.intent ?? streamIntent ?? 'chat')}`}>
+										{badgeLabel(m)}
 									</span>
 								)}
 							</div>
@@ -304,7 +330,7 @@ export function ChatPanel() {
 							</div>
 						)}
 
-						{m.planId && !loading && (
+						{m.planId && !loading && !m.agentic && (
 							<div className="action-row">
 								<button type="button" onClick={() => vscode.postMessage({ type: 'executePlanStep', planId: m.planId })}>
 									Run step 1
@@ -349,6 +375,20 @@ export function ChatPanel() {
 			</div>
 
 			<div className="chat-toolbar">
+				<div className="mode-selector" role="tablist" aria-label="Chat mode">
+					{CHAT_MODES.map((mode) => (
+						<button
+							key={mode.id}
+							type="button"
+							className={`mode-pill${chatMode === mode.id ? ' active' : ''}`}
+							title={mode.hint}
+							disabled={loading}
+							onClick={() => setChatMode(mode.id)}
+						>
+							{mode.label}
+						</button>
+					))}
+				</div>
 				<button className="secondary toolbar-btn" type="button" onClick={() => vscode.postMessage({ type: 'clearChat' })} disabled={loading || messages.length === 0}>
 					Clear chat
 				</button>
@@ -364,7 +404,7 @@ export function ChatPanel() {
 							send(input);
 						}
 					}}
-					placeholder="Ask anything… (Enter to send, Shift+Enter for new line)"
+					placeholder="Ask naturally… (Enter to send)"
 					rows={2}
 					disabled={loading}
 				/>

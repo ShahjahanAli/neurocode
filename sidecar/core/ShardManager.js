@@ -174,12 +174,15 @@ Format for each file:
 
 		if (requestedFile && fs.existsSync(requestedFile)) {
 			const content = this._readFile(requestedFile);
-			const maxForReview = reviewTask ? Math.min(2500, budget - 400) : Math.min(1200, budget - 500);
-			const tokens = Math.min(this.countTokens(content), maxForReview);
+			const fullTokens = this.countTokens(content);
+			const maxForReview = reviewTask
+				? Math.min(fullTokens, budget - 400, 3200)
+				: Math.min(1200, budget - 500);
+			const tokens = Math.min(fullTokens, maxForReview);
 			shards.push({
 				file: requestedFile,
 				relativeFile: this._rel(requestedFile, projectPath),
-				content: tokens >= this.countTokens(content) ? content : content.slice(0, tokens * 4),
+				content: reviewTask && tokens >= fullTokens ? content : content.slice(0, tokens * 4),
 				reason: 'requested file',
 				tokenCount: tokens,
 				priority: 0,

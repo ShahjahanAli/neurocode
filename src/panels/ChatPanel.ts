@@ -4,7 +4,7 @@ import type { AttentionHeatmap } from '../editor/AttentionHeatmap';
 import { getWebviewHtml } from './webviewUtils';
 import { applyEdit, applyAllCodeBlocks, parseCodeBlocks, resolveFileUri, showDiff, stripNeuroCodeAppendix, type ParseCodeBlocksOptions } from '../utils/DiffApplier';
 import { buildContinuePrompt, isTruncatedResponse as isTruncatedLlmResponse, mergeContinuation } from '../utils/CodeBatchMerger';
-import type { AgentChatData, ChatIntent, ChatTurn } from '../sidecar/types';
+import type { AgentChatData, ChatIntent, ChatMode, ChatTurn } from '../sidecar/types';
 import { AutoIndexer } from '../services/AutoIndexer';
 import { getConfig } from '../utils/config';
 
@@ -242,9 +242,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 		folder: vscode.WorkspaceFolder,
 		editor: vscode.TextEditor | undefined,
 		forceIntent?: ChatIntent,
-		options?: { seedAccumulated?: string; isManualContinue?: boolean },
+		options?: {
+			seedAccumulated?: string;
+			isManualContinue?: boolean;
+			chatMode?: ChatMode;
+		},
 	): Promise<AgentChatData> {
 		const cfg = getConfig();
+		const chatMode = options?.chatMode ?? cfg.chat.mode;
 		const maxRounds = cfg.chat.autoContinue ? cfg.chat.maxContinueRounds : 1;
 		let accumulated = options?.seedAccumulated ?? '';
 		let batchResult: AgentChatData | null = null;
@@ -281,10 +286,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 					projectPath: folder.uri.fsPath,
 					history,
 					forceIntent: isContinueRound ? 'edit' : forceIntent,
+					chatMode: isContinueRound ? 'implement' : chatMode,
+					fixOnCheck: cfg.chat.fixOnCheck,
 				},
 				(chunk) => {
 					if (chunk.type === 'intent' && !isContinueRound) {
-						this.post({ type: 'streamIntent', intent: chunk.intent });
+						this.post({
+							type: 'streamIntent',
+							intent: chunk.intent,
+							agentic: chunk.agentic,
+						});
 					}
 					if (chunk.type === 'token' && chunk.content) {
 						roundText += chunk.content;
@@ -356,7 +367,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 	private async runAgentTask(
 		task: string,
 		forceIntent?: ChatIntent,
-		options?: { seedAccumulated?: string; isManualContinue?: boolean },
+		options?: {
+			seedAccumulated?: string;
+			isManualContinue?: boolean;
+			chatMode?: ChatMode;
+		},
 	): Promise<void> {
 		const folder = vscode.workspace.workspaceFolders?.[0];
 		if (!folder) {
@@ -385,7 +400,23 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 				options,
 			);
 
-			const finalData = await this.maybeAutoApplyEdits(data, folder.uri.fsPath);
+			let finalData = await this.maybeApplyOrphanCode(
+				await this.maybeAutoApplyEdits(data, folder.uri.fsPath),
+				folder.uri.fsPath,
+			);
+
+			const cfg = getConfig();
+			const shouldRunAgent =
+				finalData.planId &&
+				(finalData.agentic || (options?.chatMode ?? cfg.chat.mode) === 'agent');
+
+			if (shouldRunAgent && finalData.planId) {
+				finalData = await this.runAgenticPlanLoop(
+					finalData,
+					folder,
+					editor,
+				);
+			}
 
 			this.appendStoredMessage({
 				role: 'assistant',
@@ -445,6 +476,88 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 				},
 			});
 		}
+	}
+
+	/**
+	 * Auto-executes plan steps in Agent mode (Cursor / Antigravity style).
+	 * @param planData - Initial plan response with planId.
+	 * @param folder - Workspace folder.
+	 * @param editor - Active editor, if any.
+	 */
+	private async runAgenticPlanLoop(
+		planData: AgentChatData,
+		folder: vscode.WorkspaceFolder,
+		editor: vscode.TextEditor | undefined,
+	): Promise<AgentChatData> {
+		const cfg = getConfig();
+		if (!planData.planId || !cfg.chat.autoApply) {
+			return planData;
+		}
+
+		let response = planData.response;
+		const filesApplied = [...(planData.filesApplied ?? [])];
+		let stepNum = 0;
+
+		while (stepNum < cfg.chat.agentMaxSteps) {
+			stepNum += 1;
+			this.post({
+				type: 'batchProgress',
+				round: stepNum,
+				message: `Agent executing step ${stepNum}…`,
+			});
+
+			const res = await this.sidecar.client.executePlanStep(
+				planData.planId,
+				folder.uri.fsPath,
+				editor?.document.uri.fsPath,
+			);
+
+			if (!res.success || !res.data) {
+				response += `\n\n**Agent stopped:** ${res.error ?? 'step execution failed'}`;
+				break;
+			}
+
+			if (res.data.status === 'complete' || !res.data.stepId) {
+				response += '\n\n---\n**Agent complete** — all plan steps finished.';
+				break;
+			}
+
+			const stepText = res.data.response ?? res.data.diff ?? '';
+			if (!stepText.trim()) {
+				continue;
+			}
+
+			const applyOptions = {
+				...this.getApplyOptions(res.data.shardsUsed),
+				allowIncomplete: false,
+			};
+			const applyResult = await applyAllCodeBlocks(stepText, folder.uri.fsPath, applyOptions);
+			filesApplied.push(...applyResult.applied);
+
+			const appliedSummary = applyResult.applied.length
+				? applyResult.applied.map((f) => `\`${f.file}\` (${f.action})`).join(', ')
+				: '(no files written — review output)';
+
+			response += `\n\n### Step ${stepNum}: ${res.data.stepId}\n**Applied:** ${appliedSummary}`;
+			this.post({ type: 'streamSetText', text: response });
+		}
+
+		this.post({ type: 'batchProgress', round: 0 });
+
+		if (filesApplied.length > 0) {
+			void vscode.window.showInformationMessage(
+				`NeuroCode Agent: Applied ${filesApplied.length} file change(s) across plan steps`,
+			);
+		}
+
+		return {
+			...planData,
+			response,
+			intent: 'edit',
+			agentic: true,
+			filesApplied,
+			truncated: false,
+		};
 	}
 
 	/**
@@ -516,6 +629,54 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 	}
 
 	/**
+	 * Applies code embedded in an Explain response when the model ignored review rules.
+	 * @param data - Agent chat response.
+	 * @param projectPath - Workspace root.
+	 */
+	private async maybeApplyOrphanCode(
+		data: AgentChatData,
+		projectPath: string,
+	): Promise<AgentChatData> {
+		if (data.intent !== 'chat' || !getConfig().chat.fixOnCheck || !getConfig().chat.autoApply) {
+			return data;
+		}
+		if ((data.filesApplied?.length ?? 0) > 0) {
+			return data;
+		}
+
+		const applyOptions = {
+			...this.getApplyOptions(data.shardsUsed),
+			allowIncomplete: false,
+		};
+		const blocks = parseCodeBlocks(data.response, applyOptions).filter(
+			(b) => b.filename && b.code.trim().length > 40,
+		);
+		if (blocks.length === 0) {
+			return data;
+		}
+
+		const result = await applyAllCodeBlocks(data.response, projectPath, applyOptions);
+		if (result.applied.length === 0) {
+			return data;
+		}
+
+		const summary = result.applied
+			.map((f) => `- \`${f.file}\` (${f.action})`)
+			.join('\n');
+
+		void vscode.window.showInformationMessage(
+			`NeuroCode: Applied ${result.applied.length} file(s) from review response`,
+		);
+
+		return {
+			...data,
+			intent: 'edit',
+			filesApplied: result.applied,
+			response: `${data.response}\n\n---\n**Applied to your project:**\n${summary}`,
+		};
+	}
+
+	/**
 	 * @param msg - Message from webview.
 	 */
 	private async handleMessage(msg: {
@@ -525,6 +686,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 		sourceText?: string;
 		planId?: string;
 		forceIntent?: ChatIntent;
+		chatMode?: ChatMode;
 		truncated?: boolean;
 		appliedFiles?: string[];
 		shardFiles?: string[];
@@ -555,7 +717,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 						isManualContinue: true,
 					});
 				} else {
-					await this.runAgentTask(task, msg.forceIntent);
+					await this.runAgentTask(task, msg.forceIntent, { chatMode: msg.chatMode });
 				}
 				break;
 			}
@@ -579,17 +741,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 				this.post({ type: 'streamStart' });
 				this.post({ type: 'streamIntent', intent: 'edit' });
 
-				const res = await this.sidecar.client.post<{
-					stepId: string | null;
-					status: string;
-					diff?: string;
-					shardsUsed: Array<{ file: string; reason: string; tokenCount: number }>;
-					tokensUsed?: number;
-					provider?: string;
-				}>(`/agent/plan/${msg.planId}/execute`, {
-					projectPath: folder.uri.fsPath,
-					activeFile: editor?.document.uri.fsPath,
-				});
+				const res = await this.sidecar.client.executePlanStep(
+					msg.planId,
+					folder.uri.fsPath,
+					editor?.document.uri.fsPath,
+				);
 
 				if (!res.success || !res.data) {
 					this.post({ type: 'error', message: res.error ?? 'Step execution failed' });
@@ -620,9 +776,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 					break;
 				}
 
-				const stepResponse = res.data.diff
-					? `\`\`\`typescript\n${res.data.diff}\n\`\`\``
-					: `Step **${res.data.stepId}** completed.`;
+				const stepResponse = res.data.response
+					?? (res.data.diff
+						? `\`\`\`typescript\n${res.data.diff}\n\`\`\``
+						: `Step **${res.data.stepId}** completed.`);
 				const stepText = `Implemented **${res.data.stepId}**:\n\n${stepResponse}`;
 
 				this.appendStoredMessage({

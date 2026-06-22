@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import type { ChatMode } from '../sidecar/types';
 
 /** LLM provider configuration. */
 export interface LlmConfig {
@@ -57,7 +58,14 @@ export interface NeuroCodeConfig {
 	review: { parallelAgents: number; agents: string[] };
 	drift: { enabled: boolean; threshold: number };
 	crossrepo: { enabled: boolean; sharedIndexPath: string };
-	chat: { autoApply: boolean; autoContinue: boolean; maxContinueRounds: number };
+	chat: {
+		mode: ChatMode;
+		autoApply: boolean;
+		autoContinue: boolean;
+		maxContinueRounds: number;
+		fixOnCheck: boolean;
+		agentMaxSteps: number;
+	};
 }
 
 /**
@@ -128,9 +136,12 @@ export function getConfig(): NeuroCodeConfig {
 			sharedIndexPath: cfg.get<string>('crossrepo.sharedIndexPath', ''),
 		},
 		chat: {
+			mode: cfg.get<ChatMode>('chat.mode', 'auto'),
 			autoApply: cfg.get<boolean>('chat.autoApply', true),
 			autoContinue: cfg.get<boolean>('chat.autoContinue', true),
 			maxContinueRounds: cfg.get<number>('chat.maxContinueRounds', 8),
+			fixOnCheck: cfg.get<boolean>('chat.fixOnCheck', true),
+			agentMaxSteps: cfg.get<number>('chat.agentMaxSteps', 8),
 		},
 	};
 }

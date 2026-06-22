@@ -255,23 +255,41 @@ function parseBlockBody(tag: string, body: string): ParsedCodeBlock {
  */
 function parseUnfencedFileSections(source: string): ParsedCodeBlock[] {
 	const blocks: ParsedCodeBlock[] = [];
-	const headerRe = /(?:^|\n)\/\/\s*(?:filename|file|path)\s*:\s*(.+)\r?\n/g;
-	const matches = [...source.matchAll(headerRe)];
-	if (matches.length === 0) {
-		return blocks;
-	}
+	const headerPatterns = [
+		/(?:^|\n)\/\/\s*(?:filename|file|path)\s*:\s*(.+)\r?\n/g,
+		/(?:^|\n)\/\/\s*([\w./@-]+\.[a-z0-9]+)\s*\r?\n/g,
+	];
 
-	for (let i = 0; i < matches.length; i++) {
-		const m = matches[i];
-		const filename = normalizeFilename(m[1]);
-		const start = (m.index ?? 0) + m[0].length;
-		const end = i + 1 < matches.length ? (matches[i + 1].index ?? source.length) : source.length;
-		let code = source.slice(start, end).trim();
-		if (code.includes('```')) {
+	for (const headerRe of headerPatterns) {
+		const matches = [...source.matchAll(headerRe)];
+		if (matches.length === 0) {
 			continue;
 		}
-		if (code && looksLikeFilePath(filename)) {
-			blocks.push({ filename, language: 'plaintext', code });
+
+		for (let i = 0; i < matches.length; i++) {
+			const m = matches[i];
+			const filename = normalizeFilename(m[1]);
+			if (!looksLikeFilePath(filename)) {
+				continue;
+			}
+			const start = (m.index ?? 0) + m[0].length;
+			const end = i + 1 < matches.length ? (matches[i + 1].index ?? source.length) : source.length;
+			let code = source.slice(start, end).trim();
+			if (code.includes('```')) {
+				continue;
+			}
+			// Stop at markdown section headers after the code
+			const sectionBreak = code.search(/\n#{2,}\s+[A-Z]/);
+			if (sectionBreak > 0) {
+				code = code.slice(0, sectionBreak).trim();
+			}
+			if (code) {
+				blocks.push({ filename, language: 'plaintext', code });
+			}
+		}
+
+		if (blocks.length > 0) {
+			return blocks;
 		}
 	}
 

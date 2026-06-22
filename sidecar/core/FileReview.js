@@ -183,23 +183,95 @@ export function analyzeFileCompleteness(content) {
 }
 
 /**
+ * @param {Array<{ relativeFile: string, content: string, reason?: string, file?: string }>} shards
+ * @param {string} task
+ * @returns {{ relativeFile: string, content: string, file?: string } | null}
+ */
+export function getPrimaryReviewShard(shards, task) {
+	const hint = extractFileHintFromTask(task)?.toLowerCase() ?? '';
+	return (
+		shards.find((s) => hint && s.relativeFile.toLowerCase().includes(hint)) ??
+		shards.find((s) => s.reason === 'requested file') ??
+		shards.find((s) => s.reason === 'active file') ??
+		shards[0] ??
+		null
+	);
+}
+
+/**
+ * @param {{ file?: string, content: string }} shard
+ * @returns {string}
+ */
+export function getFullFileContent(shard) {
+	if (shard?.file && fs.existsSync(shard.file)) {
+		try {
+			return fs.readFileSync(shard.file, 'utf8');
+		} catch {
+			// fall through
+		}
+	}
+	return shard?.content ?? '';
+}
+
+/**
+ * @param {string} task
+ * @param {Array<{ relativeFile: string, content: string, reason?: string, file?: string }>} shards
+ * @param {boolean} [fixOnCheck=true]
+ * @returns {boolean}
+ */
+export function shouldAutoFixOnCheck(task, shards, fixOnCheck = true) {
+	if (!fixOnCheck || !isFileReviewTask(task)) {
+		return false;
+	}
+	const primary = getPrimaryReviewShard(shards, task);
+	if (!primary) {
+		return false;
+	}
+	const fullContent = getFullFileContent(primary);
+	return !analyzeFileCompleteness(fullContent).complete;
+}
+
+/**
+ * @param {string} task
+ * @param {Array<{ relativeFile: string, content: string, reason?: string, file?: string }>} shards
+ * @returns {string}
+ */
+export function buildAutoFixTask(task, shards) {
+	const primary = getPrimaryReviewShard(shards, task);
+	if (!primary) {
+		return task;
+	}
+
+	const fullContent = getFullFileContent(primary);
+	const analysis = analyzeFileCompleteness(fullContent);
+	const issueList = analysis.issues.map((i) => `- ${i}`).join('\n');
+
+	return `The file \`${primary.relativeFile}\` is incomplete or has structural errors. Complete and fix it in the project.
+
+Detected issues:
+${issueList || '- file appears truncated or unfinished'}
+
+Requirements:
+- Output the FULL corrected file in a fenced code block
+- First line inside the block MUST be: // filename: ${primary.relativeFile}
+- Preserve all valid existing logic from the current file
+- Finish truncated methods, fix syntax errors, add missing exports
+- Do NOT explain in prose — output the complete file only`;
+}
+
+/**
  * @param {Array<{ relativeFile: string, content: string, reason?: string }>} shards
  * @param {string} task
  * @returns {string}
  */
 export function buildReviewNotes(shards, task) {
-	const hint = extractFileHintFromTask(task)?.toLowerCase() ?? '';
-	const primary =
-		shards.find((s) => hint && s.relativeFile.toLowerCase().includes(hint)) ??
-		shards.find((s) => s.reason === 'requested file') ??
-		shards.find((s) => s.reason === 'active file') ??
-		shards[0];
+	const primary = getPrimaryReviewShard(shards, task);
 
 	if (!primary) {
 		return 'No source file was loaded. Ask the user to open the file or run **Index Project**.';
 	}
 
-	const analysis = analyzeFileCompleteness(primary.content);
+	const analysis = analyzeFileCompleteness(getFullFileContent(primary));
 	const status = analysis.complete
 		? 'Structure looks complete (automated check only — still review logic by hand).'
 		: '**Likely incomplete or truncated** — automated structural checks failed.';

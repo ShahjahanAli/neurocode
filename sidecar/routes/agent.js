@@ -113,7 +113,7 @@ router.post('/ask', async (req, res) => {
 
 router.post('/chat', async (req, res) => {
 	try {
-		const { task, activeFile, projectPath, history, forceIntent } = req.body ?? {};
+		const { task, activeFile, projectPath, history, forceIntent, chatMode, fixOnCheck } = req.body ?? {};
 		if (!task || !projectPath) {
 			return res.status(400).json({ success: false, error: 'task and projectPath required' });
 		}
@@ -124,6 +124,8 @@ router.post('/chat', async (req, res) => {
 			projectPath,
 			history,
 			forceIntent,
+			chatMode,
+			fixOnCheck,
 		});
 
 		res.json({ success: true, data });
@@ -141,7 +143,7 @@ router.post('/chat/stream', async (req, res) => {
 	res.setHeader('Connection', 'keep-alive');
 	res.flushHeaders();
 
-	const { task, activeFile, projectPath, history, forceIntent } = req.body ?? {};
+	const { task, activeFile, projectPath, history, forceIntent, chatMode, fixOnCheck } = req.body ?? {};
 	if (!task || !projectPath) {
 		res.write(`data: ${JSON.stringify({ type: 'error', message: 'task and projectPath required' })}\n\n`);
 		res.write('data: [DONE]\n\n');
@@ -150,7 +152,7 @@ router.post('/chat/stream', async (req, res) => {
 
 	await streamOrchestratedChat(
 		services,
-		{ task, activeFile, projectPath, history, forceIntent },
+		{ task, activeFile, projectPath, history, forceIntent, chatMode, fixOnCheck },
 		(event) => {
 			res.write(`data: ${JSON.stringify(event)}\n\n`);
 		},
@@ -290,10 +292,13 @@ router.post('/plan/:planId/execute', async (req, res) => {
 		);
 
 		const adapter = await LLMRouter.getAdapter();
-		const messages = services.shardManager.buildPrompt(task, shards);
+		const messages = services.shardManager.buildMessagesForIntent('edit', task, shards, []);
 		let response;
 		try {
-			response = await adapter.chat(messages, { temperature: 0.1, max_tokens: 1500 });
+			response = await adapter.chat(messages, {
+				temperature: 0.1,
+				max_tokens: Math.min(4000, Math.max(2000, LLMRouter.getTokenBudget() - 500)),
+			});
 		} catch (err) {
 			services.db.prepare(
 				'UPDATE plan_steps SET status = ?, error = ? WHERE id = ?',
@@ -314,6 +319,7 @@ router.post('/plan/:planId/execute', async (req, res) => {
 			data: {
 				stepId: next.id,
 				status: 'done',
+				response,
 				diff: extractFirstCodeBlock(response),
 				shardsUsed: shards.map((s) => ({
 					file: s.relativeFile,

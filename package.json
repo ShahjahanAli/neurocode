@@ -322,6 +322,24 @@
           "minimum": 1,
           "maximum": 20,
           "description": "Maximum LLM continuation calls per implement request before stopping."
+        },
+        "neurocode.chat.fixOnCheck": {
+          "type": "boolean",
+          "default": true,
+          "description": "When you ask to check/review an incomplete file, automatically complete and write it to the project (Cursor-style)."
+        },
+        "neurocode.chat.mode": {
+          "type": "string",
+          "enum": ["auto", "explain", "plan", "implement", "agent"],
+          "default": "auto",
+          "description": "Default chat mode. Auto infers intent from natural language (like Cursor). Agent plans and executes steps automatically."
+        },
+        "neurocode.chat.agentMaxSteps": {
+          "type": "number",
+          "default": 8,
+          "minimum": 1,
+          "maximum": 12,
+          "description": "Maximum plan steps to auto-execute in Agent mode."
         }
       }
     }

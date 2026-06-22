@@ -188,10 +188,19 @@ export class SidecarClient {
 
 	/**
 	 * @param planId - Plan identifier.
+	 * @param projectPath - Workspace root for step execution.
+	 * @param activeFile - Optional active editor path.
 	 * @returns Next step execution result.
 	 */
-	executePlanStep(planId: string): Promise<SidecarResponse<PlanExecuteData>> {
-		return this.post<PlanExecuteData>(`/agent/plan/${planId}/execute`);
+	executePlanStep(
+		planId: string,
+		projectPath: string,
+		activeFile?: string,
+	): Promise<SidecarResponse<PlanExecuteData>> {
+		return this.post<PlanExecuteData>(`/agent/plan/${planId}/execute`, {
+			projectPath,
+			activeFile,
+		});
 	}
 
 	/**

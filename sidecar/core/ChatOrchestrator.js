@@ -1,8 +1,10 @@
 import { randomUUID } from 'crypto';
 import { LLMRouter } from './LLMRouter.js';
-import { isFileReviewTask } from './FileReview.js';
+import { getPrimaryReviewShard } from './FileReview.js';
+import { resolveUserIntent } from './IntentResolver.js';
 
 /** @typedef {'chat' | 'plan' | 'edit'} ChatIntent */
+/** @typedef {'auto' | 'explain' | 'plan' | 'implement' | 'agent'} ChatMode */
 
 const PLANNER_PROMPT = `You are a software task planner. Break the user's task into at most 8 ordered, actionable steps.
 Return ONLY valid JSON (no markdown):
@@ -28,59 +30,15 @@ Rules:
 - If context is truly empty, tell them to run **NeuroCode: Index Project** from the Command Palette
 - Keep explanations concise but thorough
 - Always end with a "## Suggested next steps" section containing 2–4 short, actionable bullets
-- If the user might want implementation, tell them to say **"implement …"** or **"go for it"** to write code directly into the project`;
+- When the user likely wants code changes, offer to proceed — they can say **yes**, **go ahead**, or just describe the fix in plain language; NeuroCode will infer intent automatically`;
 
 /**
- * Classifies user message intent for routing.
+ * Legacy alias — delegates to resolveUserIntent.
  * @param {string} message
  * @returns {ChatIntent}
  */
 export function classifyIntent(message) {
-	const m = message.toLowerCase().trim();
-
-	if (isFileReviewTask(message)) {
-		return 'chat';
-	}
-
-	if (
-		/^finish\b/.test(m) ||
-		/\b(finish|complete)\s+(?:the\s+)?(?:file\s+)?[`"']?[\w./-]+\.(?:ts|tsx|js|jsx|py)\b/.test(m)
-	) {
-		return 'edit';
-	}
-
-	// Explicit implementation requests (Cursor-style "do it")
-	if (
-		/\b(go for|implement|build it|code it|apply it|do it now|make it|ship it|write the code|add the code)\b/.test(m) ||
-		/\b(number|#|item|option|feature)\s*\d+\b/.test(m) ||
-		/^go for\b/.test(m) ||
-		/^implement\b/.test(m) ||
-		/^build\b/.test(m) ||
-		/^continue\b/.test(m)
-	) {
-		return 'edit';
-	}
-
-	const isQuestion =
-		/\b(what|why|how|explain|describe|tell me|can you check|can you read|review|analyze|analyse|understand|look at|thoughts on|feedback on|read this)\b/.test(m) ||
-		m.endsWith('?');
-
-	if (
-		/\b(plan|roadmap|break down|step.by.step|multi.?step|migrate|rebuild|outline)\b/.test(m) ||
-		/^how should i\b/.test(m) ||
-		/^what should i do\b/.test(m)
-	) {
-		return 'plan';
-	}
-
-	if (
-		!isQuestion &&
-		/\b(add|implement|fix|refactor|change|update|create|remove|delete|modify|write|rename|move|build|make the)\b/.test(m)
-	) {
-		return 'edit';
-	}
-
-	return 'chat';
+	return resolveUserIntent(message).intent;
 }
 
 /**
@@ -122,9 +80,9 @@ export function formatPlanMarkdown(task, steps, planId) {
 		...steps.map((s, i) => `${i + 1}. **${s.description}**`),
 		'',
 		'### Suggested next steps',
-		'- Click **Run step 1** below to implement the first step',
+		'- Click **Run step 1** below to implement the first step (or switch to **Agent** mode to run all steps automatically)',
 		'- Ask me to adjust the plan or explain any step',
-		'- Say **implement …** for a direct code change without planning',
+		'- Say **yes** or **go ahead** to implement without re-explaining',
 	];
 	return lines.join('\n');
 }
@@ -187,6 +145,28 @@ export function extractFirstCodeBlock(response) {
 }
 
 /**
+ * Resolves intent after context is assembled (history, shards, mode).
+ * @param {string} task
+ * @param {ChatIntent | undefined} forceIntent
+ * @param {Array} shards
+ * @param {Array<{role: string, content: string}>} [history]
+ * @param {{ chatMode?: ChatMode, fixOnCheck?: boolean }} [options]
+ * @returns {{ intent: ChatIntent, effectiveTask: string, autoFixed: boolean, agentic: boolean, reason?: string }}
+ */
+export function resolveIntentWithContext(task, forceIntent, shards, history = [], options = {}) {
+	if (forceIntent) {
+		return {
+			intent: forceIntent,
+			effectiveTask: task,
+			autoFixed: false,
+			agentic: options.chatMode === 'agent',
+		};
+	}
+
+	return resolveUserIntent(task, { history, shards, ...options });
+}
+
+/**
  * @param {import('./services.js').services} services
  * @param {object} params
  * @param {string} params.task
@@ -194,10 +174,20 @@ export function extractFirstCodeBlock(response) {
  * @param {string} params.projectPath
  * @param {Array<{role: string, content: string}>} [params.history]
  * @param {ChatIntent} [params.forceIntent]
+ * @param {ChatMode} [params.chatMode]
+ * @param {boolean} [params.fixOnCheck]
  * @returns {Promise<object>}
  */
 export async function runOrchestratedChat(services, params) {
-	const { task, activeFile, projectPath, history = [], forceIntent } = params;
+	const {
+		task,
+		activeFile,
+		projectPath,
+		history = [],
+		forceIntent,
+		chatMode = 'auto',
+		fixOnCheck = true,
+	} = params;
 	const startTime = Date.now();
 
 	if (services.runpodManager) {
@@ -208,7 +198,6 @@ export async function runOrchestratedChat(services, params) {
 		}
 	}
 
-	const intent = forceIntent ?? classifyIntent(task);
 	const adapter = await LLMRouter.getAdapter();
 	const provider = LLMRouter.getActiveProvider();
 	const modelInfo = await adapter.getModelInfo();
@@ -222,20 +211,37 @@ export async function runOrchestratedChat(services, params) {
 	);
 	const { shards, totalTokens, budget, indexed, fileCount } = assembleResult;
 
+	const resolved = resolveIntentWithContext(task, forceIntent, shards, history, {
+		chatMode,
+		fixOnCheck,
+	});
+	const effectiveIntent = resolved.intent;
+	const effectiveTask = resolved.effectiveTask;
+	const agentic = resolved.agentic;
+
 	let response = '';
 	let planId;
 	let steps;
 
-	if (intent === 'plan') {
+	if (effectiveIntent === 'plan') {
 		const plan = await createPlan(services, task, shards, projectPath);
 		planId = plan.planId;
 		steps = plan.steps;
 		response = formatPlanMarkdown(task, steps, planId);
 	} else {
-		const messages = services.shardManager.buildMessagesForIntent(intent, task, shards, history);
-		const temp = intent === 'chat' ? 0.5 : 0.1;
-		const maxTokens = getMaxTokensForIntent(intent);
+		const messages = services.shardManager.buildMessagesForIntent(
+			effectiveIntent,
+			effectiveTask,
+			shards,
+			history,
+		);
+		const temp = effectiveIntent === 'chat' ? 0.5 : 0.1;
+		const maxTokens = getMaxTokensForIntent(effectiveIntent);
 		response = await adapter.chat(messages, { temperature: temp, max_tokens: maxTokens });
+	}
+
+	if (resolved.autoFixed && effectiveIntent === 'edit') {
+		response = `**Incomplete file detected** — completing \`${getPrimaryReviewShard(shards, task)?.relativeFile ?? 'file'}\` in your project.\n\n${response}`;
 	}
 
 	if (services.runpodManager) {
@@ -263,8 +269,9 @@ export async function runOrchestratedChat(services, params) {
 
 	return {
 		response,
-		intent,
-		diff: intent === 'edit' ? extractFirstCodeBlock(response) : undefined,
+		intent: effectiveIntent,
+		agentic,
+		diff: effectiveIntent === 'edit' ? extractFirstCodeBlock(response) : undefined,
 		planId,
 		steps,
 		shardsUsed: shards.map((s) => ({
@@ -290,12 +297,17 @@ export async function runOrchestratedChat(services, params) {
  * @param {(event: object) => void} write
  */
 export async function streamOrchestratedChat(services, params, write) {
-	const { task, activeFile, projectPath, history = [], forceIntent } = params;
+	const {
+		task,
+		activeFile,
+		projectPath,
+		history = [],
+		forceIntent,
+		chatMode = 'auto',
+		fixOnCheck = true,
+	} = params;
 
 	try {
-		const intent = forceIntent ?? classifyIntent(task);
-		write({ type: 'intent', intent });
-
 		if (services.runpodManager) {
 			try {
 				await services.runpodManager.ensureReady();
@@ -313,6 +325,16 @@ export async function streamOrchestratedChat(services, params, write) {
 		);
 		const { shards, totalTokens, budget, indexed, fileCount } = assembleResult;
 
+		const resolved = resolveIntentWithContext(task, forceIntent, shards, history, {
+			chatMode,
+			fixOnCheck,
+		});
+		const effectiveIntent = resolved.intent;
+		const effectiveTask = resolved.effectiveTask;
+		const agentic = resolved.agentic;
+
+		write({ type: 'intent', intent: effectiveIntent, agentic });
+
 		const adapter = await LLMRouter.getAdapter();
 		const provider = LLMRouter.getActiveProvider();
 		const modelInfo = await adapter.getModelInfo();
@@ -322,16 +344,27 @@ export async function streamOrchestratedChat(services, params, write) {
 		let planId;
 		let steps;
 
-		if (intent === 'plan') {
+		if (effectiveIntent === 'plan') {
 			const plan = await createPlan(services, task, shards, projectPath);
 			planId = plan.planId;
 			steps = plan.steps;
 			response = formatPlanMarkdown(task, steps, planId);
 			write({ type: 'token', content: response });
 		} else {
-			const messages = services.shardManager.buildMessagesForIntent(intent, task, shards, history);
-			const temp = intent === 'chat' ? 0.5 : 0.1;
-			const maxTokens = getMaxTokensForIntent(intent);
+			const messages = services.shardManager.buildMessagesForIntent(
+				effectiveIntent,
+				effectiveTask,
+				shards,
+				history,
+			);
+			const temp = effectiveIntent === 'chat' ? 0.5 : 0.1;
+			const maxTokens = getMaxTokensForIntent(effectiveIntent);
+
+			if (resolved.autoFixed && effectiveIntent === 'edit') {
+				const banner = `**Incomplete file detected** — completing \`${getPrimaryReviewShard(shards, task)?.relativeFile ?? 'file'}\` in your project…\n\n`;
+				response = banner;
+				write({ type: 'token', content: banner });
+			}
 
 			for await (const token of adapter.stream(messages, { temperature: temp, max_tokens: maxTokens })) {
 				response += token;
@@ -356,8 +389,9 @@ export async function streamOrchestratedChat(services, params, write) {
 			type: 'done',
 			data: {
 				response,
-				intent,
-				diff: intent === 'edit' ? extractFirstCodeBlock(response) : undefined,
+				intent: effectiveIntent,
+				agentic,
+				diff: effectiveIntent === 'edit' ? extractFirstCodeBlock(response) : undefined,
 				planId,
 				steps,
 				shardsUsed: shards.map((s) => ({

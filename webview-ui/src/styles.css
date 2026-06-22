@@ -131,8 +131,24 @@ body {
 .applied-files ul { margin: 4px 0 0; padding-left: 18px; }
 .action-tag { color: #4AFF9B; font-size: 0.85em; }
 
-.chat-toolbar { display: flex; justify-content: flex-end; }
+.chat-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
 .toolbar-btn { font-size: 0.75em; padding: 4px 8px; }
+
+.mode-selector { display: flex; gap: 4px; flex-wrap: wrap; }
+.mode-pill {
+  background: var(--nc-surface);
+  color: var(--nc-muted);
+  border: 1px solid var(--nc-border);
+  padding: 4px 10px;
+  font-size: 0.72em;
+  border-radius: 999px;
+}
+.mode-pill.active {
+  background: rgba(124, 111, 247, 0.2);
+  color: var(--nc-text);
+  border-color: var(--nc-accent);
+}
+.intent-badge.intent-agent { background: rgba(124, 111, 247, 0.25); color: #c4b5fd; }
 
 .input-row textarea { resize: vertical; min-height: 44px; font-family: inherit; }
 

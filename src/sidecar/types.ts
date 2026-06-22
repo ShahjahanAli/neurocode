@@ -72,6 +72,9 @@ export interface AgentAskData {
 /** Chat intent modes routed by the orchestrator. */
 export type ChatIntent = 'chat' | 'plan' | 'edit';
 
+/** How NeuroCode interprets messages (Cursor-style modes). */
+export type ChatMode = 'auto' | 'explain' | 'plan' | 'implement' | 'agent';
+
 /** Conversation turn for multi-turn chat. */
 export interface ChatTurn {
 	role: 'user' | 'assistant';
@@ -86,11 +89,14 @@ export interface AgentChatRequest {
 	projectPath: string;
 	history?: ChatTurn[];
 	forceIntent?: ChatIntent;
+	chatMode?: ChatMode;
+	fixOnCheck?: boolean;
 }
 
 /** Unified chat response data. */
 export interface AgentChatData extends AgentAskData {
 	intent: ChatIntent;
+	agentic?: boolean;
 	planId?: string;
 	steps?: Array<{
 		id: string;
@@ -108,6 +114,7 @@ export interface AgentChatData extends AgentAskData {
 export interface AgentChatStreamChunk {
 	type: 'intent' | 'token' | 'done' | 'error';
 	intent?: ChatIntent;
+	agentic?: boolean;
 	content?: string;
 	data?: AgentChatData;
 	message?: string;
@@ -126,10 +133,13 @@ export interface PlanData {
 
 /** Plan step execution result. */
 export interface PlanExecuteData {
-	stepId: string;
+	stepId: string | null;
 	status: string;
+	response?: string;
 	diff?: string;
 	shardsUsed: Array<{ file: string; reason: string; tokenCount: number }>;
+	tokensUsed?: number;
+	provider?: string;
 }
 
 /** Shard preview response. */
