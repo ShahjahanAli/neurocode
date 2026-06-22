@@ -4,6 +4,13 @@ import { encode } from 'gpt-tokenizer';
 import { LLMRouter } from './LLMRouter.js';
 import { EmbeddingService } from './EmbeddingService.js';
 import { CHAT_SYSTEM, trimHistory } from './ChatOrchestrator.js';
+import {
+	buildReviewNotes,
+	extractFileHintFromTask,
+	isFileReviewTask,
+	resolveTaskFilePath,
+	REVIEW_FILE_RULES,
+} from './FileReview.js';
 import { walkProjectFiles } from './CodeGraph.js';
 
 /**
@@ -53,8 +60,6 @@ export class ShardManager {
 	 * @returns {Array<{role: string, content: string}>}
 	 */
 	buildMessagesForIntent(intent, task, shards, history = []) {
-		const contextBlock = this.formatContextBlock(shards);
-
 		if (intent === 'edit') {
 			if (shards.length === 0) {
 				return this.buildChatPrompt(task, shards, history);
@@ -62,7 +67,9 @@ export class ShardManager {
 			return this.buildEditPrompt(task, shards, history);
 		}
 
-		return this.buildChatPrompt(task, shards, history);
+		const review = isFileReviewTask(task);
+		const reviewNotes = review ? buildReviewNotes(shards, task) : '';
+		return this.buildChatPrompt(task, shards, history, { review, reviewNotes });
 	}
 
 	/**
@@ -71,13 +78,21 @@ export class ShardManager {
 	 * @param {Array<{role: string, content: string}>} [history]
 	 * @returns {Array<{role: string, content: string}>}
 	 */
-	buildChatPrompt(task, shards, history = []) {
+	buildChatPrompt(task, shards, history = [], options = {}) {
 		const contextBlock = this.formatContextBlock(shards);
 		const contextNote = contextBlock
 			? `Relevant project context:\n${contextBlock}`
 			: 'No source files were loaded. Tell the user to run **NeuroCode: Index Project** and open a relevant file.';
 
-		const messages = [{ role: 'system', content: CHAT_SYSTEM }];
+		const reviewSection = options.reviewNotes
+			? `\n\nAutomated file review:\n${options.reviewNotes}\n`
+			: '';
+
+		const systemContent = options.review
+			? `${CHAT_SYSTEM}\n${REVIEW_FILE_RULES}`
+			: CHAT_SYSTEM;
+
+		const messages = [{ role: 'system', content: systemContent }];
 		for (const turn of trimHistory(history)) {
 			if (turn.role === 'user' || turn.role === 'assistant') {
 				messages.push({ role: turn.role, content: turn.content });
@@ -85,7 +100,7 @@ export class ShardManager {
 		}
 		messages.push({
 			role: 'user',
-			content: `${contextNote}\n\nUser message: ${task}`,
+			content: `${contextNote}${reviewSection}\n\nUser message: ${task}`,
 		});
 		return messages;
 	}
@@ -151,8 +166,28 @@ Format for each file:
 	async assembleContext(task, activeFile, projectPath, memoryGraph = null, crossRepoIndexer = null) {
 		const shards = [];
 		let budget = this.MAX_TOKENS;
+		const reviewTask = isFileReviewTask(task);
+		const fileHint = extractFileHintFromTask(task);
+		const requestedFile = fileHint
+			? resolveTaskFilePath(fileHint, projectPath, this.db)
+			: null;
 
-		if (activeFile && fs.existsSync(activeFile)) {
+		if (requestedFile && fs.existsSync(requestedFile)) {
+			const content = this._readFile(requestedFile);
+			const maxForReview = reviewTask ? Math.min(2500, budget - 400) : Math.min(1200, budget - 500);
+			const tokens = Math.min(this.countTokens(content), maxForReview);
+			shards.push({
+				file: requestedFile,
+				relativeFile: this._rel(requestedFile, projectPath),
+				content: tokens >= this.countTokens(content) ? content : content.slice(0, tokens * 4),
+				reason: 'requested file',
+				tokenCount: tokens,
+				priority: 0,
+			});
+			budget -= tokens;
+		}
+
+		if (activeFile && fs.existsSync(activeFile) && activeFile !== requestedFile) {
 			const content = this._readFile(activeFile);
 			const tokens = Math.min(this.countTokens(content), budget - 500);
 			shards.push({
@@ -166,7 +201,8 @@ Format for each file:
 			budget -= tokens;
 		}
 
-		if (activeFile) {
+		const contextFile = requestedFile ?? activeFile;
+		if (contextFile) {
 			const related = this.db.prepare(`
 				SELECT f.path, f.token_count, 'import' as rel FROM dependencies d
 				JOIN files f ON f.id = d.to_file_id
@@ -175,7 +211,7 @@ Format for each file:
 				SELECT f.path, f.token_count, 'caller' as rel FROM dependencies d
 				JOIN files f ON f.id = d.from_file_id
 				JOIN files af ON af.id = d.to_file_id WHERE af.path = ?
-			`).all(activeFile, activeFile);
+			`).all(contextFile, contextFile);
 
 			for (const r of related) {
 				if (budget <= 300) {

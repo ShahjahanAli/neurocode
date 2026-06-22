@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import { LLMRouter } from './LLMRouter.js';
+import { isFileReviewTask } from './FileReview.js';
 
 /** @typedef {'chat' | 'plan' | 'edit'} ChatIntent */
 
@@ -22,6 +23,7 @@ Rules:
 - Reference specific files from the context when relevant
 - Give honest, practical feedback on code quality, UX, and architecture
 - Do NOT dump entire file contents unless the user explicitly asks to see code
+- Do NOT rewrite or "fix" files when the user only asked to check or review — explain issues instead
 - Do NOT ask the user to paste code — the workspace context is already attached
 - If context is truly empty, tell them to run **NeuroCode: Index Project** from the Command Palette
 - Keep explanations concise but thorough
@@ -35,6 +37,17 @@ Rules:
  */
 export function classifyIntent(message) {
 	const m = message.toLowerCase().trim();
+
+	if (isFileReviewTask(message)) {
+		return 'chat';
+	}
+
+	if (
+		/^finish\b/.test(m) ||
+		/\b(finish|complete)\s+(?:the\s+)?(?:file\s+)?[`"']?[\w./-]+\.(?:ts|tsx|js|jsx|py)\b/.test(m)
+	) {
+		return 'edit';
+	}
 
 	// Explicit implementation requests (Cursor-style "do it")
 	if (

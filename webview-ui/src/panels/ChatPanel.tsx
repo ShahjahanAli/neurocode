@@ -23,6 +23,7 @@ interface Message {
 }
 
 const QUICK_PROMPTS = [
+	{ label: 'Check open file', task: 'Can you check the file I have open — what is done and what is still missing?', intent: 'chat' as ChatIntent },
 	{ label: 'Explain this file', task: 'Explain the file I have open — what does it do and how is it structured?', intent: 'chat' as ChatIntent },
 	{ label: 'What should I do next?', task: 'Based on this project, what should I work on next?', intent: 'chat' as ChatIntent },
 	{ label: 'Plan a feature', task: 'Plan how to add user authentication to this project', intent: 'plan' as ChatIntent },
