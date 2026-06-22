@@ -202,6 +202,9 @@ function updateStatusBar(health: HealthData): void {
 				? `$(remote-explorer) NeuroCode | ${modelName} | ${fileCount} files`
 				: `$(chip) NeuroCode | ${modelName} | ${fileCount} files`;
 			break;
+		case 'direct-vllm':
+			statusBarItem.text = `$(remote-explorer) NeuroCode | ${modelName} | ${fileCount} files`;
+			break;
 		default:
 			statusBarItem.text = `$(info) NeuroCode | ${modelName} | ${fileCount} files`;
 	}

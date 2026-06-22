@@ -38,9 +38,15 @@ app.get('/health', async (_req, res) => {
 		const provider = LLMRouter.getActiveProvider();
 		const tokenBudget = LLMRouter.getTokenBudget();
 
-		const podStatus = runpodManager
-			? await runpodManager.getStatus().catch(() => ({ podState: 'unknown' }))
-			: { podState: 'not-configured' };
+		let podState = 'not-configured';
+		let idleRemainingMs = null;
+		if (runpodManager) {
+			const podStatus = await runpodManager.getStatus().catch(() => ({ podState: 'unknown' }));
+			podState = podStatus.podState;
+			idleRemainingMs = podStatus.idleRemainingMs ?? null;
+		} else if (provider === 'vllm' && available) {
+			podState = 'direct-vllm';
+		}
 
 		res.json({
 			success: true,
@@ -50,8 +56,8 @@ app.get('/health', async (_req, res) => {
 				provider,
 				model: modelInfo,
 				tokenBudget,
-				podState: podStatus.podState,
-				idleRemainingMs: podStatus.idleRemainingMs ?? null,
+				podState,
+				idleRemainingMs,
 				indexed: global.indexStatus?.done ?? false,
 				fileCount: global.indexStatus?.fileCount ?? 0,
 			},

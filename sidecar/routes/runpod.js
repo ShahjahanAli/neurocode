@@ -1,15 +1,40 @@
 import { Router } from 'express';
 import { runpodManager } from '../server.js';
 import { services } from '../core/services.js';
+import { LLMRouter } from '../core/LLMRouter.js';
 
 const router = Router();
 
 router.get('/status', async (_req, res) => {
 	if (!runpodManager) {
-		return res.json({ success: true, data: { podState: 'not-configured' } });
+		try {
+			await LLMRouter.getAdapter();
+			const provider = LLMRouter.getActiveProvider();
+			if (provider === 'vllm') {
+				const modelInfo = await LLMRouter.getAdapter().then((a) => a.getModelInfo());
+				return res.json({
+					success: true,
+					data: {
+						podState: 'direct-vllm',
+						provider: 'vllm',
+						model: modelInfo?.name,
+						lifecycleConfigured: false,
+					},
+				});
+			}
+			return res.json({
+				success: true,
+				data: { podState: 'not-configured', provider, lifecycleConfigured: false },
+			});
+		} catch {
+			return res.json({
+				success: true,
+				data: { podState: 'not-configured', lifecycleConfigured: false },
+			});
+		}
 	}
 	const status = await runpodManager.getStatus();
-	res.json({ success: true, data: status });
+	res.json({ success: true, data: { ...status, lifecycleConfigured: true } });
 });
 
 router.post('/start', async (_req, res) => {

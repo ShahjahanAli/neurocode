@@ -5,7 +5,8 @@ const STATE_CONFIG: Record<string, { color: string; icon: string; label: string 
 	warm: { color: '#FF6B35', icon: '🔥', label: 'Qwen3 warm' },
 	stopping: { color: '#FFD700', icon: '⟳', label: 'Stopping...' },
 	unknown: { color: '#888', icon: '?', label: 'Unknown state' },
-	'not-configured': { color: '#555', icon: '—', label: 'RunPod not configured' },
+	'not-configured': { color: '#555', icon: '—', label: 'LLM not connected' },
+	'direct-vllm': { color: '#4AFF9B', icon: '●', label: 'vLLM connected' },
 };
 
 interface Props {
