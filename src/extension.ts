@@ -88,7 +88,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	};
 
 	hubProvider = new HubPanelProvider(context.extensionUri, sidecarManager, () => sidecarReady);
+	let leftChatProvider: ChatPanelProvider | undefined;
 	chatProvider = new ChatPanelProvider(
+		context.extensionUri,
+		sidecarManager,
+		heatmap,
+		context,
+		() => sidecarReady,
+	);
+	leftChatProvider = new ChatPanelProvider(
 		context.extensionUri,
 		sidecarManager,
 		heatmap,
@@ -117,7 +125,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	context.subscriptions.push(
 		vscode.window.registerWebviewViewProvider('neurocode.hubView', hubProvider),
 		vscode.window.registerWebviewViewProvider('neurocode.rightPanel', chatProvider),
-		vscode.window.registerWebviewViewProvider('neurocode.chatViewLeft', chatProvider),
+		vscode.window.registerWebviewViewProvider('neurocode.chatViewLeft', leftChatProvider),
 		vscode.window.registerWebviewViewProvider('neurocode.shardsView', shardProvider),
 		vscode.window.registerWebviewViewProvider('neurocode.tasksView', new TaskQueueProvider(context.extensionUri, sidecarManager)),
 		vscode.window.registerWebviewViewProvider('neurocode.reviewView', new ReviewPanelProvider(context.extensionUri, sidecarManager)),

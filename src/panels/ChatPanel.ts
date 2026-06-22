@@ -32,6 +32,7 @@ interface StoredChatMessage {
  */
 export class ChatPanelProvider implements vscode.WebviewViewProvider {
 	static instance?: ChatPanelProvider;
+	static rightPanel?: ChatPanelProvider;
 
 	private view?: vscode.WebviewView;
 	private viewType = 'neurocode.chatViewLeft';
@@ -57,7 +58,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 		if (getSidecarReady) {
 			this.getSidecarReady = getSidecarReady;
 		}
-		ChatPanelProvider.instance = this;
 	}
 
 	/** @returns Whether this provider hosts the tabbed right sidebar. */
@@ -142,6 +142,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 	resolveWebviewView(webviewView: vscode.WebviewView): void {
 		this.view = webviewView;
 		this.viewType = webviewView.viewType;
+		ChatPanelProvider.instance = this;
+		if (webviewView.viewType === 'neurocode.rightPanel') {
+			ChatPanelProvider.rightPanel = this;
+		}
 		this.loadPersistedChat();
 		webviewView.webview.options = {
 			enableScripts: true,
@@ -162,6 +166,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 				clearInterval(this.podPollTimer);
 			}
 		});
+
+		if (this.isRightPanel()) {
+			void this.pushHubStatus();
+		}
 	}
 
 	/** @returns Workspace-scoped key for chat persistence. */
@@ -236,7 +244,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
 		await vscode.commands.executeCommand(`${getChatViewId()}.focus`);
 		if (getConfig().ui.chatLocation === 'right') {
-			ChatPanelProvider.instance?.switchTab('chat');
+			ChatPanelProvider.rightPanel?.switchTab('chat');
 		}
 	}
 

@@ -36,6 +36,11 @@ export function RightSidebarPanel() {
 	const vscode = useVsCodeApi();
 	const [tab, setTab] = useState<RightTab>('chat');
 
+	useEffect(() => {
+		document.body.classList.add('right-sidebar-layout');
+		return () => document.body.classList.remove('right-sidebar-layout');
+	}, []);
+
 	const selectTab = useCallback((next: RightTab) => {
 		setTab(next);
 		if (next === 'overview') {

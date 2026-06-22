@@ -139,8 +139,7 @@
         {
           "type": "webview",
           "id": "neurocode.rightPanel",
-          "name": "NeuroCode",
-          "when": "neurocode.chatLocation == right"
+          "name": "NeuroCode"
         }
       ],
       "neurocode-sidebar": [

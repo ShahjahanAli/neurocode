@@ -120,7 +120,7 @@ export class HubPanelProvider implements vscode.WebviewViewProvider {
 			if (getConfig().ui.chatLocation === 'right') {
 				await vscode.commands.executeCommand('workbench.action.focusAuxiliaryBar');
 				await vscode.commands.executeCommand(`${chatViewId}.focus`);
-				ChatPanelProvider.instance?.switchTab('chat');
+				ChatPanelProvider.rightPanel?.switchTab('chat');
 				return;
 			}
 			await vscode.commands.executeCommand('workbench.view.extension.neurocode-sidebar');
@@ -140,7 +140,7 @@ export class HubPanelProvider implements vscode.WebviewViewProvider {
 			};
 			const tab = tabMap[panel];
 			if (tab) {
-				ChatPanelProvider.instance?.switchTab(tab);
+				ChatPanelProvider.rightPanel?.switchTab(tab);
 			}
 			return;
 		}
