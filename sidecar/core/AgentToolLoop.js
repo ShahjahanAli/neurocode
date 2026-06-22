@@ -125,6 +125,7 @@ export async function streamAgentToolLoop(services, params, write) {
 		projectPath,
 		history = [],
 		maxSteps = 10,
+		attachments = [],
 	} = params;
 
 	try {
@@ -144,6 +145,7 @@ export async function streamAgentToolLoop(services, params, write) {
 			projectPath,
 			services.memoryGraph,
 			services.crossRepoIndexer,
+			attachments,
 		);
 		const { shards, totalTokens, budget, indexed, fileCount } = assembleResult;
 

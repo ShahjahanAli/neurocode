@@ -162,8 +162,9 @@ Format for each file:
 	 * @param {string} projectPath
 	 * @param {import('./ProjectMemoryGraph.js').ProjectMemoryGraph | null} memoryGraph
 	 * @param {import('./CrossRepoIndexer.js').CrossRepoIndexer | null} crossRepoIndexer
+	 * @param {Array<{path: string, kind: string, content?: string, lineStart?: number, lineEnd?: number}>} [attachedFiles]
 	 */
-	async assembleContext(task, activeFile, projectPath, memoryGraph = null, crossRepoIndexer = null) {
+	async assembleContext(task, activeFile, projectPath, memoryGraph = null, crossRepoIndexer = null, attachedFiles = []) {
 		const shards = [];
 		let budget = this.MAX_TOKENS;
 		const reviewTask = isFileReviewTask(task);
@@ -188,6 +189,65 @@ Format for each file:
 				priority: 0,
 			});
 			budget -= tokens;
+		}
+
+		if (Array.isArray(attachedFiles) && attachedFiles.length > 0) {
+			for (const att of attachedFiles) {
+				if (budget <= 300) {
+					break;
+				}
+				const rel = String(att.path ?? '').replace(/\\/g, '/').replace(/^\.\//, '');
+				if (!rel) {
+					continue;
+				}
+				const absPath = path.isAbsolute(rel) ? rel : path.resolve(projectPath, rel);
+				if (att.kind === 'selection' && att.content) {
+					const snippet = String(att.content);
+					const tokens = Math.min(this.countTokens(snippet), budget - 200, 2000);
+					const lineLabel = att.lineStart != null
+						? `lines ${att.lineStart}-${att.lineEnd ?? att.lineStart}`
+						: 'selection';
+					if (shards.some((s) => s.file === absPath && s.reason?.includes('attached selection'))) {
+						continue;
+					}
+					shards.push({
+						file: absPath,
+						relativeFile: this._rel(absPath, projectPath),
+						content: snippet.slice(0, tokens * 4),
+						reason: `attached selection (${lineLabel})`,
+						tokenCount: tokens,
+						priority: 0,
+					});
+					budget -= tokens;
+					continue;
+				}
+				if (!fs.existsSync(absPath)) {
+					continue;
+				}
+				if (shards.some((s) => s.file === absPath)) {
+					const existing = shards.find((s) => s.file === absPath);
+					if (existing) {
+						existing.reason = 'attached file';
+						existing.priority = 0;
+					}
+					continue;
+				}
+				try {
+					const content = this._readFile(absPath);
+					const tokens = Math.min(this.countTokens(content), budget - 200, 2500);
+					shards.push({
+						file: absPath,
+						relativeFile: this._rel(absPath, projectPath),
+						content: content.slice(0, tokens * 4),
+						reason: 'attached file',
+						tokenCount: tokens,
+						priority: 0,
+					});
+					budget -= tokens;
+				} catch {
+					// unreadable
+				}
+			}
 		}
 
 		if (activeFile && fs.existsSync(activeFile) && activeFile !== requestedFile) {

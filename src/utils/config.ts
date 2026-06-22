@@ -67,6 +67,7 @@ export interface NeuroCodeConfig {
 		fixOnCheck: boolean;
 		agentMaxSteps: number;
 		agentToolMaxSteps: number;
+		maxAttachments: number;
 	};
 	feedback: { enabled: boolean };
 }
@@ -158,6 +159,7 @@ export function getConfig(): NeuroCodeConfig {
 			fixOnCheck: cfg.get<boolean>('chat.fixOnCheck', true),
 			agentMaxSteps: cfg.get<number>('chat.agentMaxSteps', 8),
 			agentToolMaxSteps: cfg.get<number>('chat.agentToolMaxSteps', 10),
+			maxAttachments: cfg.get<number>('chat.maxAttachments', 5),
 		},
 		feedback: {
 			enabled: cfg.get<boolean>('feedback.enabled', true),

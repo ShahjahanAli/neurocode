@@ -178,6 +178,7 @@ export function resolveIntentWithContext(task, forceIntent, shards, history = []
  * @param {ChatIntent} [params.forceIntent]
  * @param {ChatMode} [params.chatMode]
  * @param {boolean} [params.fixOnCheck]
+ * @param {Array<{path: string, kind: string, content?: string, lineStart?: number, lineEnd?: number}>} [params.attachments]
  * @returns {Promise<object>}
  */
 export async function runOrchestratedChat(services, params) {
@@ -189,6 +190,7 @@ export async function runOrchestratedChat(services, params) {
 		forceIntent,
 		chatMode = 'auto',
 		fixOnCheck = true,
+		attachments = [],
 	} = params;
 	const startTime = Date.now();
 
@@ -210,6 +212,7 @@ export async function runOrchestratedChat(services, params) {
 		projectPath,
 		services.memoryGraph,
 		services.crossRepoIndexer,
+		attachments,
 	);
 	const { shards, totalTokens, budget, indexed, fileCount } = assembleResult;
 
@@ -319,6 +322,7 @@ export async function streamOrchestratedChat(services, params, write) {
 		forceIntent,
 		chatMode = 'auto',
 		fixOnCheck = true,
+		attachments = [],
 	} = params;
 
 	try {
@@ -336,6 +340,7 @@ export async function streamOrchestratedChat(services, params, write) {
 			projectPath,
 			services.memoryGraph,
 			services.crossRepoIndexer,
+			attachments,
 		);
 		const { shards, totalTokens, budget, indexed, fileCount } = assembleResult;
 

@@ -3,9 +3,10 @@ import { randomUUID } from 'crypto';
 import type { SidecarManager } from '../sidecar/SidecarManager';
 import type { AttentionHeatmap } from '../editor/AttentionHeatmap';
 import { getWebviewHtml } from './webviewUtils';
-import { applyEdit, applyAllCodeBlocks, parseCodeBlocks, resolveFileUri, showDiff, stripNeuroCodeAppendix, type ParseCodeBlocksOptions } from '../utils/DiffApplier';
+import { applyAllCodeBlocks, applyEdit, parseCodeBlocks, resolveFileUri, stripNeuroCodeAppendix, type ParseCodeBlocksOptions } from '../utils/DiffApplier';
+import { ChangeReviewManager, type ChangeReviewSummary } from '../services/ChangeReviewManager';
 import { buildContinuePrompt, isTruncatedResponse as isTruncatedLlmResponse, mergeContinuation } from '../utils/CodeBatchMerger';
-import type { AgentChatData, ChatIntent, ChatMode, ChatTurn, HealthData } from '../sidecar/types';
+import type { AgentChatData, ChatAttachment, ChatIntent, ChatMode, ChatTurn, HealthData } from '../sidecar/types';
 import { AutoIndexer } from '../services/AutoIndexer';
 import { getConfig, getChatViewId } from '../utils/config';
 
@@ -29,8 +30,10 @@ interface StoredChatMessage {
 	filesApplied?: Array<{ file: string; action: 'created' | 'updated' }>;
 	truncated?: boolean;
 	feedbackRating?: 'positive' | 'negative';
+	changeReview?: ChangeReviewSummary;
 	/** Raw LLM output before NeuroCode status footers (used for Apply). */
 	sourceText?: string;
+	attachments?: ChatAttachment[];
 }
 
 /**
@@ -45,6 +48,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 	private podPollTimer?: ReturnType<typeof setInterval>;
 	private conversationHistory: ChatTurn[] = [];
 	private uiMessages: StoredChatMessage[] = [];
+	private pendingAttachments: ChatAttachment[] = [];
 	private lastIndexing: { filesProcessed: number; totalFiles: number } | null = null;
 	private getSidecarReady: () => boolean = () => false;
 
@@ -203,10 +207,21 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 	}
 
 	/**
+	 * Strips heavy selection content before persisting to workspace state.
+	 * @param attachments - Attachments from the compose bar.
+	 */
+	private sanitizeAttachmentsForStorage(attachments: ChatAttachment[]): ChatAttachment[] {
+		return attachments.map(({ content: _content, ...rest }) => rest);
+	}
+
+	/**
 	 * @param message - Message to append and persist.
 	 */
 	private appendStoredMessage(message: StoredChatMessage): void {
-		this.uiMessages.push(message);
+		const stored = message.attachments?.length
+			? { ...message, attachments: this.sanitizeAttachmentsForStorage(message.attachments) }
+			: message;
+		this.uiMessages.push(stored);
 		if (this.uiMessages.length > 40) {
 			this.uiMessages = this.uiMessages.slice(-40);
 		}
@@ -235,8 +250,59 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 				filesApplied: m.filesApplied,
 				truncated: m.truncated,
 				feedbackRating: m.feedbackRating,
+				changeReview: m.changeReview,
+				attachments: m.attachments,
 			})),
 		});
+	}
+
+	/** @returns Stable key for deduplicating attachments. */
+	private attachmentKey(att: ChatAttachment): string {
+		if (att.kind === 'selection') {
+			return `selection:${att.path}:${att.lineStart ?? 0}:${att.lineEnd ?? 0}`;
+		}
+		return `file:${att.path}`;
+	}
+
+	/** Pushes pending attachments to the webview. */
+	private syncAttachmentsToWebview(): void {
+		this.post({
+			type: 'syncAttachments',
+			attachments: this.pendingAttachments,
+			maxAttachments: getConfig().chat.maxAttachments,
+		});
+	}
+
+	/**
+	 * Adds an attachment if under the configured limit.
+	 * @param att - Attachment to queue for the next message.
+	 */
+	private addPendingAttachment(att: ChatAttachment): void {
+		const max = getConfig().chat.maxAttachments;
+		if (this.pendingAttachments.length >= max) {
+			void vscode.window.showWarningMessage(`Maximum ${max} attachments per message.`);
+			return;
+		}
+		if (this.pendingAttachments.some((a) => this.attachmentKey(a) === this.attachmentKey(att))) {
+			return;
+		}
+		this.pendingAttachments.push(att);
+		this.syncAttachmentsToWebview();
+	}
+
+	/**
+	 * Builds sidecar attachment payload (selection content only; files read in sidecar).
+	 * @param attachments - User attachments from the webview.
+	 */
+	private buildAttachmentPayload(attachments: ChatAttachment[]): ChatAttachment[] {
+		return attachments.map((att) => ({
+			path: att.path.replace(/\\/g, '/'),
+			name: att.name,
+			kind: att.kind,
+			content: att.kind === 'selection' ? att.content : undefined,
+			lineStart: att.lineStart,
+			lineEnd: att.lineEnd,
+		}));
 	}
 
 	/** Opens or focuses the chat view (right secondary sidebar by default, Cursor-style). */
@@ -374,6 +440,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 			seedAccumulated?: string;
 			isManualContinue?: boolean;
 			chatMode?: ChatMode;
+			attachments?: ChatAttachment[];
 		},
 	): Promise<AgentChatData> {
 		const cfg = getConfig();
@@ -394,6 +461,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
 			const isContinueRound = round > 0 || Boolean(accumulated);
 			const roundTask = isContinueRound ? buildContinuePrompt(accumulated) : originalTask;
+			const roundAttachments = isContinueRound ? undefined : options?.attachments;
 
 			const history: ChatTurn[] = isContinueRound
 				? (options?.isManualContinue
@@ -416,6 +484,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 					forceIntent: isContinueRound ? 'edit' : forceIntent,
 					chatMode: isContinueRound ? 'implement' : chatMode,
 					fixOnCheck: cfg.chat.fixOnCheck,
+					attachments: roundAttachments?.length
+						? this.buildAttachmentPayload(roundAttachments)
+						: undefined,
 				},
 				(chunk) => {
 					if (chunk.type === 'intent' && !isContinueRound) {
@@ -506,6 +577,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 			seedAccumulated?: string;
 			isManualContinue?: boolean;
 			chatMode?: ChatMode;
+			attachments?: ChatAttachment[];
 		},
 	): Promise<void> {
 		const folder = vscode.workspace.workspaceFolders?.[0];
@@ -518,8 +590,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 		const editor = vscode.window.activeTextEditor;
 
 		if (!options?.isManualContinue) {
-			this.appendStoredMessage({ role: 'user', text: task });
-			this.post({ type: 'appendMessage', message: { role: 'user', text: task } });
+			const userAttachments = options?.attachments?.length ? [...options.attachments] : undefined;
+			this.appendStoredMessage({ role: 'user', text: task, attachments: userAttachments });
+			this.post({
+				type: 'appendMessage',
+				message: { role: 'user', text: task, attachments: userAttachments },
+			});
 		}
 
 		this.post({ type: 'streamStart' });
@@ -536,7 +612,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
 			let rawData: AgentChatData;
 			if (activeMode === 'agent' && !options?.isManualContinue) {
-				rawData = await this.runToolAgentLoop(task, folder, editor);
+				rawData = await this.runToolAgentLoop(task, folder, editor, options?.attachments);
 			} else {
 				rawData = await this.runImplementBatch(
 					task,
@@ -570,6 +646,19 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 			}
 
 			const messageId = randomUUID();
+			let changeReview: ChangeReviewSummary | undefined;
+			if (finalData.intent === 'edit' && rawData.response.includes('```')) {
+				changeReview = ChangeReviewManager.registerFromText(
+					messageId,
+					stripNeuroCodeAppendix(rawData.response),
+					folder.uri.fsPath,
+					this.getApplyOptions(finalData.shardsUsed),
+				);
+				if (finalData.filesApplied?.length) {
+					changeReview = ChangeReviewManager.markAutoApplied(messageId, finalData.filesApplied) ?? changeReview;
+				}
+			}
+
 			this.appendStoredMessage({
 				role: 'assistant',
 				text: finalData.response,
@@ -586,6 +675,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 				steps: finalData.steps,
 				filesApplied: finalData.filesApplied,
 				truncated: finalData.truncated,
+				changeReview,
 			});
 
 			lastAgentResponse = finalData;
@@ -638,6 +728,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 		task: string,
 		folder: vscode.WorkspaceFolder,
 		editor: vscode.TextEditor | undefined,
+		attachments?: ChatAttachment[],
 	): Promise<AgentChatData> {
 		const cfg = getConfig();
 
@@ -649,6 +740,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 				projectPath: folder.uri.fsPath,
 				history: this.conversationHistory.slice(0, -1),
 				maxSteps: cfg.chat.agentToolMaxSteps,
+				attachments: attachments?.length
+					? this.buildAttachmentPayload(attachments)
+					: undefined,
 			},
 			(chunk) => {
 				if (chunk.type === 'intent') {
@@ -948,14 +1042,44 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 	private postAgentResponse(data: AgentChatData, sourceText?: string, messageId?: string): void {
 		const lastUser = [...this.uiMessages].reverse().find((m) => m.role === 'user');
 		const id = messageId ?? randomUUID();
+		const stored = this.uiMessages.find((m) => m.messageId === id);
+
 		this.post({
 			type: 'agentResponse',
 			messageId: id,
 			taskText: lastUser?.text,
 			data,
 			sourceText: sourceText ?? data.response,
+			changeReview: stored?.changeReview,
 		});
 		this.post({ type: 'analyticsRefresh' });
+	}
+
+	/**
+	 * Updates webview after accept/reject on a change set.
+	 * @param messageId - Chat message id.
+	 * @param summary - Updated review summary.
+	 * @param filesApplied - Optional applied files list.
+	 */
+	syncChangeReview(
+		messageId: string,
+		summary: ChangeReviewSummary,
+		filesApplied?: Array<{ file: string; action: 'created' | 'updated' }>,
+	): void {
+		const stored = this.uiMessages.find((m) => m.messageId === messageId);
+		if (stored) {
+			stored.changeReview = summary;
+			if (filesApplied?.length) {
+				stored.filesApplied = filesApplied;
+			}
+			this.persistChat();
+		}
+		this.post({
+			type: 'changeReviewUpdate',
+			messageId,
+			changeReview: summary,
+			filesApplied,
+		});
 	}
 
 	/**
@@ -1167,7 +1291,83 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 			}
 			case 'webviewReady':
 				this.postRestoreChat();
+				this.syncAttachmentsToWebview();
 				break;
+			case 'attachActiveFile': {
+				const editor = vscode.window.activeTextEditor;
+				if (!editor || !folder) {
+					void vscode.window.showWarningMessage('Open a workspace file to attach.');
+					break;
+				}
+				const rel = vscode.workspace.asRelativePath(editor.document.uri, false);
+				const name = rel.split(/[/\\]/).pop() ?? rel;
+				this.addPendingAttachment({
+					path: rel.replace(/\\/g, '/'),
+					name,
+					kind: 'file',
+					preview: rel,
+				});
+				break;
+			}
+			case 'attachSelection': {
+				const editor = vscode.window.activeTextEditor;
+				if (!editor || editor.selection.isEmpty) {
+					void vscode.window.showWarningMessage('Select code in the editor first.');
+					break;
+				}
+				const rel = vscode.workspace.asRelativePath(editor.document.uri, false);
+				const baseName = rel.split(/[/\\]/).pop() ?? rel;
+				const lineStart = editor.selection.start.line + 1;
+				const lineEnd = editor.selection.end.line + 1;
+				const content = editor.document.getText(editor.selection);
+				const preview = content.length > 100 ? `${content.slice(0, 97)}…` : content;
+				this.addPendingAttachment({
+					path: rel.replace(/\\/g, '/'),
+					name: `${baseName} (${lineStart}-${lineEnd})`,
+					kind: 'selection',
+					content,
+					preview,
+					lineStart,
+					lineEnd,
+				});
+				break;
+			}
+			case 'pickAttachments': {
+				if (!folder) {
+					break;
+				}
+				const uris = await vscode.window.showOpenDialog({
+					canSelectMany: true,
+					canSelectFolders: false,
+					defaultUri: folder.uri,
+					openLabel: 'Attach',
+				});
+				if (!uris?.length) {
+					break;
+				}
+				for (const uri of uris) {
+					if (this.pendingAttachments.length >= getConfig().chat.maxAttachments) {
+						break;
+					}
+					const rel = vscode.workspace.asRelativePath(uri, false);
+					const name = rel.split(/[/\\]/).pop() ?? rel;
+					this.addPendingAttachment({
+						path: rel.replace(/\\/g, '/'),
+						name,
+						kind: 'file',
+						preview: rel,
+					});
+				}
+				break;
+			}
+			case 'removeAttachment': {
+				const index = (msg as { index?: number }).index;
+				if (typeof index === 'number' && index >= 0 && index < this.pendingAttachments.length) {
+					this.pendingAttachments.splice(index, 1);
+					this.syncAttachmentsToWebview();
+				}
+				break;
+			}
 			case 'askAgent': {
 				const task = msg.task ?? '';
 				const lastAssistant = [...this.uiMessages].reverse().find((m) => m.role === 'assistant');
@@ -1184,7 +1384,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 						isManualContinue: true,
 					});
 				} else {
-					await this.runAgentTask(task, msg.forceIntent, { chatMode: msg.chatMode });
+					const attachments = [...this.pendingAttachments];
+					this.pendingAttachments = [];
+					this.syncAttachmentsToWebview();
+					await this.runAgentTask(task, msg.forceIntent, { chatMode: msg.chatMode, attachments });
 				}
 				break;
 			}
@@ -1280,44 +1483,78 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 				void this.context.workspaceState.update(this.chatStorageKey(), []);
 				this.post({ type: 'chatCleared' });
 				break;
+			case 'reviewChange':
 			case 'viewDiff': {
-				const rawText = stripNeuroCodeAppendix(msg.text ?? '');
-				const shards = msg.shardFiles?.map((file) => ({ file }));
+				const messageId = (msg as { messageId?: string }).messageId;
+				const file = (msg as { file?: string }).file;
+				if (messageId) {
+					await ChangeReviewManager.review(messageId, file);
+					break;
+				}
+				const rawText = stripNeuroCodeAppendix((msg as { text?: string }).text ?? '');
+				const shards = (msg as { shardFiles?: string[] }).shardFiles?.map((f) => ({ file: f }));
 				const blocks = parseCodeBlocks(rawText, this.getApplyOptions(shards));
 				const block = blocks[0];
 				if (!block?.filename || !folder) {
 					void vscode.window.showWarningMessage(
-						'NeuroCode: No file path found in code block. Add // filename: path as the first line.',
+						'NeuroCode: No file path found in code block.',
 					);
 					return;
 				}
-				const uri = resolveFileUri(block.filename, folder.uri.fsPath);
-				if (uri) {
-					await showDiff(uri, block.code, `NeuroCode: ${block.filename}`);
-				}
+				const tempId = randomUUID();
+				ChangeReviewManager.registerFromText(
+					tempId,
+					rawText,
+					folder.uri.fsPath,
+					this.getApplyOptions(shards),
+				);
+				await ChangeReviewManager.review(tempId, block.filename);
 				break;
 			}
+			case 'acceptChange':
 			case 'acceptDiff': {
 				if (!folder) {
 					return;
 				}
-				const rawText = stripNeuroCodeAppendix(msg.sourceText ?? msg.text ?? '');
-				const shards = msg.shardFiles?.map((file) => ({ file }));
-				const applyOptions = this.getApplyOptions(shards);
-				const parsed = parseCodeBlocks(rawText, applyOptions);
-				const result = await applyAllCodeBlocks(rawText, folder.uri.fsPath, applyOptions);
-
-				if (result.applied.length === 0) {
-					const withPath = parsed.filter((b) => b.filename).length;
-					void vscode.window.showWarningMessage(
-						`NeuroCode: Applied 0 file(s). Parsed ${parsed.length} block(s), ${withPath} with paths. Open the target file in the editor and try again, or ensure blocks include // filename: src/path/file.ts`,
-					);
+				const messageId = (msg as { messageId?: string }).messageId;
+				const file = (msg as { file?: string }).file;
+				if (messageId) {
+					const { applied, summary } = await ChangeReviewManager.accept(messageId, file);
+					this.syncChangeReview(messageId, summary, applied);
+					if (applied.length > 0) {
+						void this.sidecar.client.post('/memory/record', {
+							taskDescription: this.uiMessages.find((m) => m.messageId === messageId)?.taskText ?? '',
+							filesEdited: applied.map((a) => a.file),
+							diffAccepted: true,
+						});
+					}
 					break;
 				}
-
-				void vscode.window.showInformationMessage(
-					`NeuroCode: Applied ${result.applied.length} file(s)`,
-				);
+				const rawText = stripNeuroCodeAppendix((msg as { sourceText?: string; text?: string }).sourceText ?? (msg as { text?: string }).text ?? '');
+				const shards = (msg as { shardFiles?: string[] }).shardFiles?.map((f) => ({ file: f }));
+				const applyOptions = this.getApplyOptions(shards);
+				const result = await ChangeReviewManager.acceptAllFromText(rawText, folder.uri.fsPath, applyOptions);
+				if (result.applied.length === 0) {
+					void vscode.window.showWarningMessage('NeuroCode: No changes could be applied.');
+					break;
+				}
+				break;
+			}
+			case 'rejectChange':
+			case 'rejectDiff': {
+				const messageId = (msg as { messageId?: string }).messageId;
+				const file = (msg as { file?: string }).file;
+				if (!messageId) {
+					void vscode.window.showInformationMessage('NeuroCode: Changes dismissed.');
+					break;
+				}
+				const summary = await ChangeReviewManager.reject(messageId, file);
+				this.syncChangeReview(messageId, summary);
+				void this.sidecar.client.post('/memory/record', {
+					taskDescription: this.uiMessages.find((m) => m.messageId === messageId)?.taskText ?? '',
+					filesEdited: [],
+					diffAccepted: false,
+				});
 				break;
 			}
 			case 'startPod':

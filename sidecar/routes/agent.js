@@ -126,7 +126,7 @@ router.post('/ask', async (req, res) => {
 
 router.post('/chat', async (req, res) => {
 	try {
-		const { task, activeFile, projectPath, history, forceIntent, chatMode, fixOnCheck } = req.body ?? {};
+		const { task, activeFile, projectPath, history, forceIntent, chatMode, fixOnCheck, attachments } = req.body ?? {};
 		if (!task || !projectPath) {
 			return res.status(400).json({ success: false, error: 'task and projectPath required' });
 		}
@@ -139,6 +139,7 @@ router.post('/chat', async (req, res) => {
 			forceIntent,
 			chatMode,
 			fixOnCheck,
+			attachments,
 		});
 
 		res.json({ success: true, data });
@@ -156,7 +157,7 @@ router.post('/chat/stream', async (req, res) => {
 	res.setHeader('Connection', 'keep-alive');
 	res.flushHeaders();
 
-	const { task, activeFile, projectPath, history, forceIntent, chatMode, fixOnCheck } = req.body ?? {};
+	const { task, activeFile, projectPath, history, forceIntent, chatMode, fixOnCheck, attachments } = req.body ?? {};
 	if (!task || !projectPath) {
 		res.write(`data: ${JSON.stringify({ type: 'error', message: 'task and projectPath required' })}\n\n`);
 		res.write('data: [DONE]\n\n');
@@ -165,7 +166,7 @@ router.post('/chat/stream', async (req, res) => {
 
 	await streamOrchestratedChat(
 		services,
-		{ task, activeFile, projectPath, history, forceIntent, chatMode, fixOnCheck },
+		{ task, activeFile, projectPath, history, forceIntent, chatMode, fixOnCheck, attachments },
 		(event) => {
 			res.write(`data: ${JSON.stringify(event)}\n\n`);
 		},
@@ -187,6 +188,7 @@ router.post('/loop/stream', async (req, res) => {
 		projectPath,
 		history,
 		maxSteps,
+		attachments,
 	} = req.body ?? {};
 
 	if (!task || !projectPath) {
@@ -197,7 +199,7 @@ router.post('/loop/stream', async (req, res) => {
 
 	await streamAgentToolLoop(
 		services,
-		{ task, activeFile, projectPath, history, maxSteps },
+		{ task, activeFile, projectPath, history, maxSteps, attachments },
 		(event) => {
 			res.write(`data: ${JSON.stringify(event)}\n\n`);
 		},

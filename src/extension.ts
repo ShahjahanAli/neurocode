@@ -9,6 +9,7 @@ import { registerShowMemory } from './commands/showMemory';
 import { registerToggleAirGap } from './commands/toggleAirGap';
 import { registerStartPod } from './commands/startPod';
 import { registerStopPod } from './commands/stopPod';
+import { registerChangeReview } from './commands/changeReview';
 import { registerShowCostReport } from './commands/showCostReport';
 import { SidecarManager } from './sidecar/SidecarManager';
 import type { HealthData } from './sidecar/types';
@@ -146,6 +147,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	registerStartPod(context, sidecarManager);
 	registerStopPod(context, sidecarManager);
 	registerShowCostReport(context, sidecarManager);
+	registerChangeReview(context, chatProvider);
 
 	void refreshHealthStatus();
 	healthPollTimer = setInterval(() => { void refreshHealthStatus(); }, 30_000);

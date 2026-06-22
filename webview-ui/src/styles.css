@@ -266,6 +266,96 @@ body {
 .input-row { display: flex; gap: 8px; margin-top: auto; }
 .input-row input, .input-row textarea { flex: 1; background: var(--nc-surface); color: var(--nc-text); border: 1px solid var(--nc-border); padding: 8px; border-radius: 4px; }
 
+.attachment-bar {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px;
+	margin-top: 6px;
+}
+.attachment-chips, .message-attachments {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px;
+	flex: 1;
+	min-width: 0;
+}
+.attachment-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	max-width: 220px;
+	padding: 2px 6px;
+	border-radius: 4px;
+	font-size: 0.72em;
+	background: var(--nc-surface);
+	border: 1px solid var(--nc-border);
+	color: var(--nc-text);
+}
+.attachment-chip.readonly { opacity: 0.9; }
+.attachment-chip-selection { border-color: rgba(124, 111, 247, 0.5); }
+.chip-kind {
+	font-size: 0.85em;
+	color: var(--nc-muted);
+	text-transform: uppercase;
+	letter-spacing: 0.03em;
+}
+.chip-name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.chip-remove {
+	background: none;
+	border: none;
+	color: var(--nc-muted);
+	cursor: pointer;
+	padding: 0 2px;
+	font-size: 1.1em;
+	line-height: 1;
+}
+.chip-remove:hover { color: var(--nc-text); }
+.attachment-actions { position: relative; }
+.attach-btn {
+	background: var(--nc-surface);
+	color: var(--nc-muted);
+	border: 1px solid var(--nc-border);
+	padding: 4px 10px;
+	font-size: 0.72em;
+	border-radius: 4px;
+	cursor: pointer;
+}
+.attach-btn:hover:not(:disabled) {
+	color: var(--nc-text);
+	border-color: var(--nc-accent);
+}
+.attach-btn:disabled { opacity: 0.5; cursor: default; }
+.attach-menu {
+	position: absolute;
+	bottom: 100%;
+	right: 0;
+	margin-bottom: 4px;
+	min-width: 160px;
+	background: var(--nc-surface);
+	border: 1px solid var(--nc-border);
+	border-radius: 4px;
+	box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+	z-index: 10;
+	display: flex;
+	flex-direction: column;
+}
+.attach-menu button {
+	background: none;
+	border: none;
+	color: var(--nc-text);
+	text-align: left;
+	padding: 8px 12px;
+	font-size: 0.8em;
+	cursor: pointer;
+}
+.attach-menu button:hover { background: rgba(124, 111, 247, 0.15); }
+.message-attachments { margin-bottom: 6px; }
+
 .shard-card { border: 1px solid var(--nc-border); border-radius: 4px; padding: 8px; margin: 4px 0; }
 .shard-reason { font-size: 0.75em; color: var(--nc-muted); }
 
@@ -602,4 +692,106 @@ body.right-sidebar-layout {
 	color: var(--nc-muted);
 	line-height: 1.45;
 	margin: 0;
+}
+
+/* ── Change review (Accept / Reject) ── */
+.change-review-bar {
+	margin-top: 10px;
+	padding: 10px;
+	border: 1px solid var(--nc-border);
+	border-radius: 8px;
+	background: var(--nc-surface);
+}
+.change-review-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-bottom: 8px;
+}
+.change-review-title {
+	font-size: 0.85em;
+	font-weight: 600;
+	color: var(--nc-text);
+}
+.change-review-actions {
+	display: flex;
+	gap: 6px;
+	flex-wrap: wrap;
+}
+.change-review-files {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+.change-review-file {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 6px;
+	padding: 6px 8px;
+	border-radius: 6px;
+	background: rgba(0, 0, 0, 0.15);
+	font-size: 0.82em;
+}
+.change-file-path {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-family: var(--vscode-editor-font-family, monospace);
+}
+.change-file-status {
+	font-size: 0.75em;
+	padding: 1px 6px;
+	border-radius: 3px;
+	border: 1px solid var(--nc-border);
+}
+.change-file-status.status-accepted {
+	color: var(--vscode-testing-iconPassed);
+	border-color: var(--vscode-testing-iconPassed);
+}
+.change-file-status.status-rejected {
+	color: var(--nc-muted);
+}
+.change-file-status.status-pending {
+	color: var(--nc-accent);
+	border-color: var(--nc-accent);
+}
+.change-file-actions {
+	display: flex;
+	gap: 4px;
+	margin-left: auto;
+}
+.change-btn {
+	background: var(--nc-surface);
+	color: var(--nc-text);
+	border: 1px solid var(--nc-border);
+	padding: 4px 10px;
+	border-radius: 4px;
+	font-size: 0.8em;
+	cursor: pointer;
+}
+.change-btn:hover { border-color: var(--nc-accent); }
+.change-btn.sm { padding: 2px 8px; font-size: 0.75em; }
+.change-btn.accept {
+	background: rgba(76, 175, 80, 0.15);
+	border-color: var(--vscode-testing-iconPassed, #4caf50);
+	color: var(--vscode-testing-iconPassed, #4caf50);
+}
+.change-btn.accept:hover { opacity: 0.9; }
+.change-btn.reject {
+	background: transparent;
+	border-color: var(--vscode-testing-iconFailed, #f44);
+	color: var(--vscode-testing-iconFailed, #f44);
+}
+.change-review-hint {
+	margin: 8px 0 0;
+	font-size: 0.75em;
+	color: var(--nc-muted);
 }

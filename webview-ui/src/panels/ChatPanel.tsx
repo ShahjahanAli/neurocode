@@ -1,3 +1,5 @@
+import { ChangeReviewBar, type ChangeReviewSummary } from '../components/ChangeReviewBar';
+import { ChatAttachments, MessageAttachments, type ChatAttachment } from '../components/ChatAttachments';
 import { MessageFeedback } from '../components/MessageFeedback';
 import { RunPodStatusBadge } from '../components/RunPodStatusBadge';
 import { GenomeConsentBanner } from '../components/GenomeConsentBanner';
@@ -28,6 +30,8 @@ interface Message {
 	truncated?: boolean;
 	sourceText?: string;
 	feedbackRating?: 'positive' | 'negative';
+	changeReview?: ChangeReviewSummary;
+	attachments?: ChatAttachment[];
 }
 
 const QUICK_PROMPTS = [
@@ -66,6 +70,8 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean }) {
 	const [indexing, setIndexing] = useState<string | null>(null);
 	const [batchProgress, setBatchProgress] = useState<string | null>(null);
 	const [genomeConsent, setGenomeConsent] = useState(true);
+	const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>([]);
+	const [maxAttachments, setMaxAttachments] = useState(5);
 	const messagesContainerRef = useRef<HTMLDivElement>(null);
 	const stickToBottomRef = useRef(true);
 
@@ -99,6 +105,12 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean }) {
 		vscode.postMessage({ type: 'getGenomeConsent' });
 		const handler = (e: MessageEvent) => {
 			const msg = e.data;
+			if (msg.type === 'syncAttachments') {
+				setPendingAttachments(msg.attachments ?? []);
+				if (typeof msg.maxAttachments === 'number') {
+					setMaxAttachments(msg.maxAttachments);
+				}
+			}
 			if (msg.type === 'podStatus') {
 				setPodState(msg.data.podState);
 				setIdleRemainingMs(msg.data.idleRemainingMs);
@@ -190,8 +202,20 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean }) {
 						filesApplied: msg.data.filesApplied,
 						truncated: msg.data.truncated,
 						sourceText: msg.sourceText ?? msg.data.response,
+						changeReview: msg.changeReview,
 					}];
 				});
+			}
+			if (msg.type === 'changeReviewUpdate' && msg.messageId) {
+				setMessages((m) => m.map((x) => (
+					x.messageId === msg.messageId
+						? {
+							...x,
+							changeReview: msg.changeReview,
+							filesApplied: msg.filesApplied ?? x.filesApplied,
+						}
+						: x
+				)));
 			}
 			if (msg.type === 'feedbackSaved' && msg.messageId) {
 				setMessages((m) => m.map((x) => (
@@ -308,6 +332,9 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean }) {
 
 				{messages.map((m, i) => (
 					<div key={i} className={m.role === 'user' ? 'msg-user' : 'msg-ai'}>
+						{m.role === 'user' && m.attachments && m.attachments.length > 0 && (
+							<MessageAttachments attachments={m.attachments} />
+						)}
 						{m.role === 'assistant' && (
 							<div className="msg-meta">
 								<span className="badge">{providerLabel(m.provider, m.modelUsed)}</span>
@@ -346,7 +373,7 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean }) {
 							</details>
 						)}
 
-						{m.filesApplied && m.filesApplied.length > 0 && (
+						{m.filesApplied && m.filesApplied.length > 0 && !m.changeReview?.files?.length && (
 							<div className="applied-files">
 								<strong>Written to project:</strong>
 								<ul>
@@ -355,6 +382,18 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean }) {
 									))}
 								</ul>
 							</div>
+						)}
+
+						{m.role === 'assistant' && m.intent === 'edit' && !m.streaming && !loading && m.messageId && (
+							<ChangeReviewBar
+								messageId={m.messageId}
+								text={m.text}
+								sourceText={m.sourceText}
+								shardFiles={m.shards?.map((s) => s.file)}
+								changeReview={m.changeReview}
+								filesApplied={m.filesApplied}
+								truncated={m.truncated}
+							/>
 						)}
 
 						{m.role === 'assistant' && !m.streaming && !loading && m.messageId && (
@@ -380,36 +419,17 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean }) {
 							</div>
 						)}
 
-						{m.role === 'assistant' && m.text.includes('```') && m.intent === 'edit' && !m.streaming && !loading && (
+						{m.truncated && (
 							<div className="action-row">
-								<button className="secondary" type="button" onClick={() => vscode.postMessage({ type: 'viewDiff', text: m.text, sourceText: m.sourceText, shardFiles: m.shards?.map((s) => s.file) })}>
-									View Diff
+								<button
+									type="button"
+									onClick={() => vscode.postMessage({
+										type: 'continueGeneration',
+										appliedFiles: m.filesApplied?.map((f) => f.file) ?? [],
+									})}
+								>
+									Continue
 								</button>
-								{(!m.filesApplied || m.filesApplied.length === 0) && !m.truncated && (
-									<button
-										type="button"
-										onClick={() => vscode.postMessage({
-											type: 'acceptDiff',
-											text: m.text,
-											sourceText: m.sourceText,
-											truncated: m.truncated,
-											shardFiles: m.shards?.map((s) => s.file),
-										})}
-									>
-										Accept
-									</button>
-								)}
-								{m.truncated && (
-									<button
-										type="button"
-										onClick={() => vscode.postMessage({
-											type: 'continueGeneration',
-											appliedFiles: m.filesApplied?.map((f) => f.file) ?? [],
-										})}
-									>
-										Continue
-									</button>
-								)}
 							</div>
 						)}
 					</div>
@@ -435,6 +455,16 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean }) {
 					Clear chat
 				</button>
 			</div>
+
+			<ChatAttachments
+				attachments={pendingAttachments}
+				maxAttachments={maxAttachments}
+				disabled={loading}
+				onAttachFile={() => vscode.postMessage({ type: 'attachActiveFile' })}
+				onAttachSelection={() => vscode.postMessage({ type: 'attachSelection' })}
+				onPickFiles={() => vscode.postMessage({ type: 'pickAttachments' })}
+				onRemove={(index) => vscode.postMessage({ type: 'removeAttachment', index })}
+			/>
 
 			<div className="input-row">
 				<textarea

@@ -75,6 +75,17 @@ export type ChatIntent = 'chat' | 'plan' | 'edit';
 /** How NeuroCode interprets messages (Cursor-style modes). */
 export type ChatMode = 'auto' | 'explain' | 'plan' | 'implement' | 'agent';
 
+/** User-attached file or selection for chat context. */
+export interface ChatAttachment {
+	path: string;
+	name: string;
+	kind: 'file' | 'selection';
+	preview?: string;
+	content?: string;
+	lineStart?: number;
+	lineEnd?: number;
+}
+
 /** Conversation turn for multi-turn chat. */
 export interface ChatTurn {
 	role: 'user' | 'assistant';
@@ -92,6 +103,7 @@ export interface AgentChatRequest {
 	chatMode?: ChatMode;
 	fixOnCheck?: boolean;
 	maxSteps?: number;
+	attachments?: ChatAttachment[];
 }
 
 /** Unified chat response data. */
