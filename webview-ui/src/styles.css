@@ -33,6 +33,15 @@ body {
 .msg-user { align-self: flex-end; background: var(--nc-surface); padding: 8px 12px; border-radius: 8px; max-width: 90%; }
 .msg-ai { align-self: flex-start; background: var(--nc-surface); padding: 8px 12px; border-radius: 8px; max-width: 95%; border-left: 3px solid var(--nc-accent); }
 
+.indexing-banner {
+  background: rgba(124, 111, 247, 0.12);
+  border: 1px solid var(--nc-accent);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 0.85em;
+  color: var(--nc-accent);
+}
+
 .messages { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
 
 .chat-panel { height: 100vh; max-height: 100vh; }

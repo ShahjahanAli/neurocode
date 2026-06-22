@@ -17,10 +17,13 @@ const CHAT_SYSTEM = `You are NeuroCode — a friendly expert coding assistant in
 You help developers understand their codebase, review work, and decide what to do next.
 
 Rules:
-- Answer in clear, well-structured markdown
-- Reference specific files from the provided context when relevant
+- Answer in clear, well-structured markdown using ONLY the project context provided below
+- If README, package.json, or source files are in the context, summarize what the project does, its stack, and key areas
+- Reference specific files from the context when relevant
 - Give honest, practical feedback on code quality, UX, and architecture
 - Do NOT dump entire file contents unless the user explicitly asks to see code
+- Do NOT ask the user to paste code — the workspace context is already attached
+- If context is truly empty, tell them to run **NeuroCode: Index Project** from the Command Palette
 - Keep explanations concise but thorough
 - Always end with a "## Suggested next steps" section containing 2–4 short, actionable bullets
 - If the user might want implementation, mention they can say "implement …" or "plan …" for a step-by-step plan`;
@@ -34,7 +37,7 @@ export function classifyIntent(message) {
 	const m = message.toLowerCase().trim();
 
 	const isQuestion =
-		/\b(what|why|how|explain|describe|tell me|can you check|review|analyze|analyse|understand|look at|thoughts on|feedback on)\b/.test(m) ||
+		/\b(what|why|how|explain|describe|tell me|can you check|can you read|review|analyze|analyse|understand|look at|thoughts on|feedback on|read this)\b/.test(m) ||
 		m.endsWith('?');
 
 	if (
@@ -171,13 +174,14 @@ export async function runOrchestratedChat(services, params) {
 	const provider = LLMRouter.getActiveProvider();
 	const modelInfo = await adapter.getModelInfo();
 
-	const { shards, totalTokens, budget } = await services.shardManager.assembleContext(
+	const assembleResult = await services.shardManager.assembleContext(
 		task,
 		activeFile,
 		projectPath,
 		services.memoryGraph,
 		services.crossRepoIndexer,
 	);
+	const { shards, totalTokens, budget, indexed, fileCount } = assembleResult;
 
 	let response = '';
 	let planId;
@@ -235,6 +239,8 @@ export async function runOrchestratedChat(services, params) {
 		modelUsed: modelInfo.name,
 		provider,
 		latencyMs,
+		indexed,
+		fileCount,
 	};
 }
 
@@ -259,13 +265,14 @@ export async function streamOrchestratedChat(services, params, write) {
 			}
 		}
 
-		const { shards, totalTokens, budget } = await services.shardManager.assembleContext(
+		const assembleResult = await services.shardManager.assembleContext(
 			task,
 			activeFile,
 			projectPath,
 			services.memoryGraph,
 			services.crossRepoIndexer,
 		);
+		const { shards, totalTokens, budget, indexed, fileCount } = assembleResult;
 
 		const adapter = await LLMRouter.getAdapter();
 		const provider = LLMRouter.getActiveProvider();
@@ -325,6 +332,8 @@ export async function streamOrchestratedChat(services, params, write) {
 				modelUsed: modelInfo.name,
 				provider,
 				latencyMs,
+				indexed,
+				fileCount,
 			},
 		});
 	} catch (err) {

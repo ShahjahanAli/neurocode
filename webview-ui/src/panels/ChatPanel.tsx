@@ -41,10 +41,12 @@ export function ChatPanel() {
 	const [podState, setPodState] = useState('not-configured');
 	const [idleRemainingMs, setIdleRemainingMs] = useState<number | undefined>();
 	const [cost, setCost] = useState<{ estimatedCostUsd?: number; sessionMinutes?: number; llmCalls?: number }>();
+	const [indexing, setIndexing] = useState<string | null>(null);
 	const [genomeConsent, setGenomeConsent] = useState(true);
 	const messagesEndRef = useRef<HTMLDivElement>(null);
 
 	useEffect(() => {
+		vscode.postMessage({ type: 'webviewReady' });
 		vscode.postMessage({ type: 'getGenomeConsent' });
 		const handler = (e: MessageEvent) => {
 			const msg = e.data;
@@ -52,6 +54,19 @@ export function ChatPanel() {
 				setPodState(msg.data.podState);
 				setIdleRemainingMs(msg.data.idleRemainingMs);
 				setCost(msg.data.cost);
+			}
+			if (msg.type === 'restoreChat') {
+				setMessages(msg.messages ?? []);
+				setLoading(false);
+			}
+			if (msg.type === 'appendMessage') {
+				setMessages((m) => [...m, msg.message]);
+			}
+			if (msg.type === 'indexing') {
+				setIndexing(msg.message ?? 'Indexing…');
+			}
+			if (msg.type === 'indexingDone') {
+				setIndexing(null);
 			}
 			if (msg.type === 'streamStart') {
 				setLoading(true);
@@ -123,13 +138,15 @@ export function ChatPanel() {
 
 	const send = (task: string, forceIntent?: ChatIntent) => {
 		if (!task.trim() || loading) return;
-		setMessages((m) => [...m, { role: 'user', text: task }]);
 		vscode.postMessage({ type: 'askAgent', task, forceIntent });
 		setInput('');
 	};
 
-	const providerLabel = (p?: string, model?: string) =>
-		p === 'vllm' ? 'Qwen3 · RunPod L4' : `Ollama · ${model ?? 'local'}`;
+	const providerLabel = (p?: string, model?: string) => {
+		if (p === 'ollama') return `Ollama · ${model ?? 'local'}`;
+		if (p === 'vllm') return 'Qwen · RunPod';
+		return model ?? 'NeuroCode';
+	};
 
 	return (
 		<div className="panel chat-panel">
@@ -148,6 +165,9 @@ export function ChatPanel() {
 				<GenomeConsentBanner onAccept={() => vscode.postMessage({ type: 'genomeConsent' })} />
 			)}
 
+			{indexing && (
+				<div className="indexing-banner">{indexing}</div>
+			)}
 			<div className="messages">
 				{messages.length === 0 && (
 					<div className="welcome-card">

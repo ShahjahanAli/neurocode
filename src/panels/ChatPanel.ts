@@ -8,6 +8,18 @@ import type { AgentChatData, ChatIntent, ChatTurn } from '../sidecar/types';
 /** Last agent response shared with shard visualizer. */
 export let lastAgentResponse: AgentChatData | null = null;
 
+/** Persisted chat message for UI restore. */
+interface StoredChatMessage {
+	role: 'user' | 'assistant';
+	text: string;
+	provider?: string;
+	modelUsed?: string;
+	intent?: ChatIntent;
+	shards?: Array<{ file: string; reason: string; tokenCount: number }>;
+	planId?: string;
+	steps?: Array<{ id: string; description: string; status: string }>;
+}
+
 /**
  * NeuroCode Chat sidebar WebView provider.
  */
@@ -15,6 +27,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 	private view?: vscode.WebviewView;
 	private podPollTimer?: ReturnType<typeof setInterval>;
 	private conversationHistory: ChatTurn[] = [];
+	private uiMessages: StoredChatMessage[] = [];
 
 	/**
 	 * @param extensionUri - Extension root URI.
@@ -34,6 +47,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 	 */
 	resolveWebviewView(webviewView: vscode.WebviewView): void {
 		this.view = webviewView;
+		this.loadPersistedChat();
 		webviewView.webview.options = {
 			enableScripts: true,
 			localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, 'webview-ui', 'dist')],
@@ -41,6 +55,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
 		webviewView.webview.html = this.getHtml(webviewView.webview);
 		this.startPodPolling();
+		this.postRestoreChat();
 
 		webviewView.webview.onDidReceiveMessage(async (msg: { type: string; [key: string]: unknown }) => {
 			await this.handleMessage(msg);
@@ -51,6 +66,47 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 				clearInterval(this.podPollTimer);
 			}
 		});
+	}
+
+	/** @returns Workspace-scoped key for chat persistence. */
+	private chatStorageKey(): string {
+		const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? 'no-workspace';
+		return `neurocode.chat.${root}`;
+	}
+
+	/** Loads chat history from workspace state. */
+	private loadPersistedChat(): void {
+		this.uiMessages = this.context.workspaceState.get<StoredChatMessage[]>(this.chatStorageKey(), []) ?? [];
+		this.syncConversationHistory();
+	}
+
+	/** Persists chat history to workspace state. */
+	private persistChat(): void {
+		void this.context.workspaceState.update(this.chatStorageKey(), this.uiMessages);
+	}
+
+	/** Syncs LLM API history from stored UI messages. */
+	private syncConversationHistory(): void {
+		this.conversationHistory = this.uiMessages
+			.filter((m) => m.role === 'user' || m.role === 'assistant')
+			.map((m) => ({ role: m.role, content: m.text }));
+	}
+
+	/**
+	 * @param message - Message to append and persist.
+	 */
+	private appendStoredMessage(message: StoredChatMessage): void {
+		this.uiMessages.push(message);
+		if (this.uiMessages.length > 40) {
+			this.uiMessages = this.uiMessages.slice(-40);
+		}
+		this.persistChat();
+		this.syncConversationHistory();
+	}
+
+	/** Sends stored messages to the webview. */
+	private postRestoreChat(): void {
+		this.post({ type: 'restoreChat', messages: this.uiMessages });
 	}
 
 	/** Opens or focuses the chat view. */
@@ -94,6 +150,33 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 		});
 	}
 
+	private async ensureIndexed(projectPath: string): Promise<void> {
+		const health = await this.sidecar.client.health();
+		if (health.data?.indexed && (health.data.fileCount ?? 0) > 0) {
+			return;
+		}
+
+		this.post({ type: 'indexing', message: 'Indexing project so NeuroCode can read your code…' });
+
+		const start = await this.sidecar.client.startIndex(projectPath);
+		if (!start.success || !start.data?.jobId) {
+			return;
+		}
+
+		const jobId = start.data.jobId;
+		for (let i = 0; i < 120; i++) {
+			await new Promise((r) => setTimeout(r, 1000));
+			const status = await this.sidecar.client.indexStatus(jobId);
+			if (status.data?.status === 'done') {
+				this.post({ type: 'indexingDone', fileCount: status.data.filesProcessed });
+				return;
+			}
+			if (status.data?.status === 'failed') {
+				break;
+			}
+		}
+	}
+
 	/**
 	 * @param msg - Message from webview.
 	 */
@@ -111,15 +194,21 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 		}
 
 		switch (msg.type) {
+			case 'webviewReady':
+				this.postRestoreChat();
+				break;
 			case 'askAgent': {
 				this.heatmap.clear();
 				const editor = vscode.window.activeTextEditor;
 				const task = msg.task ?? '';
-				this.conversationHistory.push({ role: 'user', content: task });
+				this.appendStoredMessage({ role: 'user', text: task });
+				this.post({ type: 'appendMessage', message: { role: 'user', text: task } });
 
 				this.post({ type: 'streamStart' });
 
 				try {
+					await this.ensureIndexed(folder!.uri.fsPath);
+
 					const data = await this.sidecar.client.chatStream(
 						{
 							task,
@@ -139,10 +228,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 						},
 					);
 
-					this.conversationHistory.push({ role: 'assistant', content: data.response });
-					if (this.conversationHistory.length > 16) {
-						this.conversationHistory = this.conversationHistory.slice(-16);
-					}
+					this.appendStoredMessage({
+						role: 'assistant',
+						text: data.response,
+						provider: data.provider,
+						modelUsed: data.modelUsed,
+						intent: data.intent,
+						shards: data.shardsUsed,
+						planId: data.planId,
+						steps: data.steps,
+					});
 
 					lastAgentResponse = data;
 					this.heatmap.apply(data.attentionMap, editor?.document.uri.fsPath);
@@ -161,10 +256,27 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 						provider: data.provider,
 					});
 				} catch (err) {
-					this.conversationHistory.pop();
+					const errText = err instanceof Error ? err.message : String(err);
+					this.uiMessages.pop();
+					this.persistChat();
+					this.syncConversationHistory();
+					this.appendStoredMessage({
+						role: 'assistant',
+						text: `**Error:** ${errText}`,
+						intent: 'chat',
+					});
 					this.post({
-						type: 'error',
-						message: err instanceof Error ? err.message : String(err),
+						type: 'agentResponse',
+						data: {
+							response: `**Error:** ${errText}`,
+							intent: 'chat',
+							shardsUsed: [],
+							tokensUsed: 0,
+							budget: 0,
+							modelUsed: '',
+							provider: 'unknown',
+							latencyMs: 0,
+						},
 					});
 				}
 				break;
@@ -195,10 +307,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 				}
 
 				if (res.data.status === 'complete') {
+					const completeMsg: StoredChatMessage = {
+						role: 'assistant',
+						text: 'All plan steps are complete.',
+						intent: 'chat',
+						provider: res.data.provider,
+					};
+					this.appendStoredMessage(completeMsg);
 					this.post({
 						type: 'agentResponse',
 						data: {
-							response: 'All plan steps are complete.',
+							response: completeMsg.text,
 							intent: 'chat',
 							shardsUsed: [],
 							tokensUsed: 0,
@@ -214,11 +333,20 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 				const stepResponse = res.data.diff
 					? `\`\`\`typescript\n${res.data.diff}\n\`\`\``
 					: `Step **${res.data.stepId}** completed.`;
+				const stepText = `Implemented **${res.data.stepId}**:\n\n${stepResponse}`;
+
+				this.appendStoredMessage({
+					role: 'assistant',
+					text: stepText,
+					intent: 'edit',
+					provider: res.data.provider,
+					shards: res.data.shardsUsed,
+				});
 
 				this.post({
 					type: 'agentResponse',
 					data: {
-						response: `Implemented **${res.data.stepId}**:\n\n${stepResponse}`,
+						response: stepText,
 						intent: 'edit',
 						diff: res.data.diff,
 						shardsUsed: res.data.shardsUsed,
@@ -232,7 +360,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 				break;
 			}
 			case 'clearChat':
+				this.uiMessages = [];
 				this.conversationHistory = [];
+				void this.context.workspaceState.update(this.chatStorageKey(), []);
 				this.post({ type: 'chatCleared' });
 				break;
 			case 'viewDiff': {

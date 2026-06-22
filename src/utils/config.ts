@@ -8,6 +8,7 @@ export interface LlmConfig {
 	vllmUrl: string;
 	vllmApiKey: string;
 	vllmModel: string;
+	fallbackToOllama: boolean;
 }
 
 /** Shard assembly limits. */
@@ -72,6 +73,7 @@ export function getConfig(): NeuroCodeConfig {
 			vllmUrl: cfg.get<string>('llm.vllmUrl', ''),
 			vllmApiKey: cfg.get<string>('llm.vllmApiKey', ''),
 			vllmModel: cfg.get<string>('llm.vllmModel', 'Qwen/Qwen2.5-Coder-7B-Instruct'),
+			fallbackToOllama: cfg.get<boolean>('llm.fallbackToOllama', false),
 		},
 		shard: {
 			maxTokens: cfg.get<number>('shard.maxTokens', 0),

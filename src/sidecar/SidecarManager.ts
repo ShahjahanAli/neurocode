@@ -47,6 +47,7 @@ export class SidecarManager {
 				NEUROCODE_VLLM_URL: cfg.llm.vllmUrl,
 				NEUROCODE_VLLM_KEY: cfg.llm.vllmApiKey,
 				NEUROCODE_VLLM_MODEL: cfg.llm.vllmModel,
+				NEUROCODE_LLM_FALLBACK: String(cfg.llm.fallbackToOllama),
 				SHARD_MAX_TOKENS: String(cfg.shard.maxTokens),
 				NEUROCODE_RUNPOD_KEY: cfg.runpod.apiKey,
 				NEUROCODE_RUNPOD_POD_ID: cfg.runpod.podId,

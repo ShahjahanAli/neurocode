@@ -4,6 +4,7 @@ import { encode } from 'gpt-tokenizer';
 import { LLMRouter } from './LLMRouter.js';
 import { EmbeddingService } from './EmbeddingService.js';
 import { CHAT_SYSTEM, trimHistory } from './ChatOrchestrator.js';
+import { walkProjectFiles } from './CodeGraph.js';
 
 /**
  * Assembles context shards within a dynamic token budget.
@@ -53,13 +54,28 @@ export class ShardManager {
 	 */
 	buildMessagesForIntent(intent, task, shards, history = []) {
 		const contextBlock = this.formatContextBlock(shards);
-		const contextNote = contextBlock
-			? `Relevant code context:\n${contextBlock}`
-			: 'No indexed code context yet. Suggest indexing the project first.';
 
 		if (intent === 'edit') {
+			if (shards.length === 0) {
+				return this.buildChatPrompt(task, shards, history);
+			}
 			return this.buildEditPrompt(task, shards);
 		}
+
+		return this.buildChatPrompt(task, shards, history);
+	}
+
+	/**
+	 * @param {string} task
+	 * @param {Array<{relativeFile: string, content: string, reason: string}>} shards
+	 * @param {Array<{role: string, content: string}>} [history]
+	 * @returns {Array<{role: string, content: string}>}
+	 */
+	buildChatPrompt(task, shards, history = []) {
+		const contextBlock = this.formatContextBlock(shards);
+		const contextNote = contextBlock
+			? `Relevant project context:\n${contextBlock}`
+			: 'No source files were loaded. Tell the user to run **NeuroCode: Index Project** and open a relevant file.';
 
 		const messages = [{ role: 'system', content: CHAT_SYSTEM }];
 		for (const turn of trimHistory(history)) {
@@ -85,6 +101,7 @@ export class ShardManager {
 		const systemPrompt = `You are NeuroCode — an expert software engineer helping implement code changes.
 
 Analyze the provided code context, then complete the task.
+Only edit files that appear in the context below — do not invent placeholder files.
 Output the modified code in a fenced block with the filename as a comment on line 1.
 You may include a brief 1–2 sentence summary BEFORE the code block explaining what you changed.
 
@@ -256,12 +273,130 @@ Format:
 			}
 		}
 
+		await this._bootstrapProjectContext(task, projectPath, shards, budget);
+
 		return {
 			shards,
 			totalTokens: this.MAX_TOKENS - budget,
 			budget: this.MAX_TOKENS,
 			provider: LLMRouter.getActiveProvider(),
+			indexed: this._getIndexedFileCount(projectPath) > 0,
+			fileCount: this._getIndexedFileCount(projectPath),
 		};
+	}
+
+	/**
+	 * Loads README, package.json, and key source files when context is thin.
+	 * @param {string} task
+	 * @param {string} projectPath
+	 * @param {Array} shards
+	 * @param {number} budget
+	 */
+	async _bootstrapProjectContext(task, projectPath, shards, budget) {
+		const isProjectWide = /\b(project|codebase|repo|repository|understand|overview|read this|whole app|landing page|tell me what)\b/i.test(task);
+		if (shards.length > 0 && !isProjectWide) {
+			return;
+		}
+
+		const keyFiles = ['README.md', 'package.json', 'tsconfig.json'];
+		for (const name of keyFiles) {
+			if (budget <= 400) {
+				break;
+			}
+			const fp = path.join(projectPath, name);
+			budget = this._tryAddShard(fp, projectPath, shards, budget, 'project overview', 0) ?? budget;
+		}
+
+		const indexedCount = this._getIndexedFileCount(projectPath);
+		if (indexedCount > 0) {
+			const prefix = projectPath.replace(/\\/g, '/');
+			const rows = this.db.prepare(`
+				SELECT path, relative_path FROM files
+				WHERE replace(path, '\\', '/') LIKE ? || '%'
+				ORDER BY
+					CASE WHEN relative_path LIKE 'src/app/page%' THEN 0
+					     WHEN relative_path LIKE 'src/%' THEN 1
+					     ELSE 2 END,
+					length(relative_path) ASC
+				LIMIT 12
+			`).all(`${prefix}%`);
+
+			for (const row of rows) {
+				if (budget <= 400) {
+					break;
+				}
+				budget = this._tryAddShard(row.path, projectPath, shards, budget, 'indexed file', 6) ?? budget;
+			}
+			return;
+		}
+
+		const exclude = JSON.parse(process.env.NEUROCODE_INDEX_EXCLUDE || '[]');
+		let added = 0;
+		for await (const fp of walkProjectFiles(projectPath, exclude)) {
+			if (added >= 10 || budget <= 400) {
+				break;
+			}
+			const before = shards.length;
+			budget = this._tryAddShard(fp, projectPath, shards, budget, 'project scan', 6) ?? budget;
+			if (shards.length > before) {
+				added++;
+			}
+		}
+	}
+
+	/**
+	 * @param {string} [projectPath]
+	 * @returns {number}
+	 */
+	_getIndexedFileCount(projectPath) {
+		try {
+			if (projectPath) {
+				const prefix = projectPath.replace(/\\/g, '/');
+				return this.db.prepare(
+					`SELECT COUNT(*) as c FROM files WHERE replace(path, '\\', '/') LIKE ? || '%'`,
+				).get(`${prefix}%`)?.c ?? 0;
+			}
+			return this.db.prepare('SELECT COUNT(*) as c FROM files').get()?.c ?? 0;
+		} catch {
+			return 0;
+		}
+	}
+
+	/**
+	 * @param {string} filePath
+	 * @param {string} projectPath
+	 * @param {Array} shards
+	 * @param {number} budget
+	 * @param {string} reason
+	 * @param {number} priority
+	 * @returns {number | undefined} Remaining budget
+	 */
+	_tryAddShard(filePath, projectPath, shards, budget, reason, priority) {
+		if (!filePath || !fs.existsSync(filePath) || budget <= 300) {
+			return budget;
+		}
+		if (shards.some((s) => s.file === filePath)) {
+			return budget;
+		}
+		try {
+			const content = this._readFile(filePath);
+			const maxTokens = reason === 'project overview' ? 800 : 500;
+			const tokens = Math.min(this.countTokens(content), maxTokens, budget - 200);
+			if (tokens <= 0) {
+				return budget;
+			}
+			shards.push({
+				file: filePath,
+				relativeFile: this._rel(filePath, projectPath),
+				content: content.slice(0, tokens * 4),
+				reason,
+				tokenCount: tokens,
+				priority,
+			});
+			return budget - tokens;
+		} catch {
+			return budget;
+		}
 	}
 
 	/**

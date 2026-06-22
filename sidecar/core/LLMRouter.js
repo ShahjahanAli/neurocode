@@ -37,6 +37,14 @@ export class LLMRouter {
 				return vllm;
 			}
 
+			const allowFallback = process.env.NEUROCODE_LLM_FALLBACK === 'true';
+			if (!allowFallback) {
+				throw new Error(
+					'RunPod vLLM is unreachable. Check neurocode.llm.vllmUrl and neurocode.llm.vllmApiKey. ' +
+					'Set neurocode.llm.fallbackToOllama to true to use local Ollama as backup.',
+				);
+			}
+
 			console.warn('[LLMRouter] vLLM unavailable — falling back to Ollama');
 		} else if (airgap) {
 			console.log('[LLMRouter] Air-gap mode — Ollama only');

@@ -187,6 +187,11 @@
           "type": "string",
           "default": "Qwen/Qwen2.5-Coder-32B-Instruct-AWQ"
         },
+        "neurocode.llm.fallbackToOllama": {
+          "type": "boolean",
+          "default": false,
+          "description": "When false and provider is vllm, fail instead of falling back to local Ollama."
+        },
         "neurocode.shard.maxTokens": {
           "type": "number",
           "default": 0,

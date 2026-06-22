@@ -65,6 +65,8 @@ export interface AgentAskData {
 	modelUsed: string;
 	provider: string;
 	latencyMs: number;
+	indexed?: boolean;
+	fileCount?: number;
 }
 
 /** Chat intent modes routed by the orchestrator. */
@@ -96,6 +98,8 @@ export interface AgentChatData extends AgentAskData {
 		dependsOn: string[];
 		status: string;
 	}>;
+	indexed?: boolean;
+	fileCount?: number;
 }
 
 /** SSE chunk from POST /agent/chat/stream. */
