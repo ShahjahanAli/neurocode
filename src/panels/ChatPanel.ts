@@ -59,6 +59,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 		webviewView.webview.html = this.getHtml(webviewView.webview);
 		this.startPodPolling();
 		this.postRestoreChat();
+		this.triggerBackgroundIndex();
 
 		webviewView.webview.onDidReceiveMessage(async (msg: { type: string; [key: string]: unknown }) => {
 			await this.handleMessage(msg);
@@ -151,6 +152,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 				cost: cost.data,
 			},
 		});
+	}
+
+	private triggerBackgroundIndex(): void {
+		const folder = vscode.workspace.workspaceFolders?.[0];
+		if (!folder) {
+			return;
+		}
+
+		void AutoIndexer.ensureIndexed(this.sidecar, folder.uri.fsPath, { silent: true });
 	}
 
 	private async ensureIndexed(projectPath: string): Promise<void> {

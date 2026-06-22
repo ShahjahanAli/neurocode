@@ -24,6 +24,7 @@ import { DebugPanelProvider } from './panels/DebugPanel';
 import { AutoIndexer } from './services/AutoIndexer';
 
 let sidecarManager: SidecarManager | undefined;
+let sidecarReady = false;
 let statusBarItem: vscode.StatusBarItem | undefined;
 let healthPollTimer: ReturnType<typeof setInterval> | undefined;
 let podPollTimer: ReturnType<typeof setInterval> | undefined;
@@ -56,7 +57,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 	try {
 		await sidecarManager.start();
+		sidecarReady = true;
 	} catch (err: unknown) {
+		sidecarReady = false;
 		const msg = err instanceof Error ? err.message : String(err);
 		logger.error(msg);
 		if (statusBarItem) {
@@ -72,7 +75,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		}
 		sidecarManager.stop();
 		sidecarManager = new SidecarManager(context);
-		await sidecarManager.start();
+		try {
+			await sidecarManager.start();
+			sidecarReady = true;
+		} catch (err: unknown) {
+			sidecarReady = false;
+			const msg = err instanceof Error ? err.message : String(err);
+			logger.error(`Sidecar restart failed: ${msg}`);
+		}
 	};
 
 	chatProvider = new ChatPanelProvider(context.extensionUri, sidecarManager, heatmap, context);
@@ -112,7 +122,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 	await maybeAutoStartPod(sidecarManager);
 
-	startAutoIndexing(sidecarManager, context);
+	if (sidecarReady) {
+		startAutoIndexing(sidecarManager, context);
+	}
 
 	logger.log('NeuroCode activated');
 }
@@ -123,25 +135,29 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
  * @param context - Extension context for workspace listeners.
  */
 function startAutoIndexing(sidecar: SidecarManager, context: vscode.ExtensionContext): void {
-	const trigger = (): void => {
-		AutoIndexer.voidAutoIndexWorkspace(sidecar, (progress) => {
-			if (!statusBarItem) {
-				return;
-			}
-			if (progress && progress.totalFiles > 0) {
-				statusBarItem.text =
-					`$(sync~spin) NeuroCode | Indexing ${progress.filesProcessed}/${progress.totalFiles}...`;
-			} else {
-				void refreshHealthStatus();
-			}
-		});
+	const onProgress = (progress: { filesProcessed: number; totalFiles: number } | null): void => {
+		if (!statusBarItem) {
+			return;
+		}
+		if (progress && progress.totalFiles > 0) {
+			statusBarItem.text =
+				`$(sync~spin) NeuroCode | Indexing ${progress.filesProcessed}/${progress.totalFiles}...`;
+		} else {
+			void refreshHealthStatus();
+		}
 	};
 
-	trigger();
+	AutoIndexer.scheduleWorkspaceAutoIndex(sidecar, onProgress, context);
 
 	context.subscriptions.push(
 		vscode.workspace.onDidChangeWorkspaceFolders(() => {
-			trigger();
+			void (async () => {
+				if (sidecarManager?.isRunning()) {
+					await sidecarManager.restart();
+					sidecarReady = true;
+				}
+				AutoIndexer.scheduleWorkspaceAutoIndex(sidecar, onProgress, context);
+			})();
 		}),
 	);
 }
@@ -186,7 +202,8 @@ async function refreshHealthStatus(): Promise<void> {
 	}
 
 	try {
-		const res = await sidecarManager.client.health();
+		const projectPath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+		const res = await sidecarManager.client.health(projectPath);
 		if (res.success && res.data) {
 			updateStatusBar(res.data);
 		}

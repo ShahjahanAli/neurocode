@@ -119,8 +119,11 @@ export class SidecarClient {
 	}
 
 	/** @returns Sidecar health and provider status. */
-	health(): Promise<SidecarResponse<HealthData>> {
-		return this.get<HealthData>('/health');
+	health(projectPath?: string): Promise<SidecarResponse<HealthData>> {
+		const qs = projectPath
+			? `?projectPath=${encodeURIComponent(projectPath)}`
+			: '';
+		return this.get<HealthData>(`/health${qs}`);
 	}
 
 	/** @param projectPath - Absolute workspace root to index. */

@@ -37,6 +37,7 @@ export class SidecarManager {
 		const sidecarUri = vscode.Uri.joinPath(this.context.extensionUri, 'sidecar', 'server.js');
 
 		this.process = cp.spawn('node', [sidecarUri.fsPath], {
+			cwd: workspaceRoot || undefined,
 			env: {
 				...process.env,
 				NEUROCODE_PORT: String(cfg.sidecar.port),
@@ -103,6 +104,22 @@ export class SidecarManager {
 			this.process.kill('SIGTERM');
 			this.process = null;
 		}
+	}
+
+	/**
+	 * Restarts the sidecar (e.g. when the workspace folder changes).
+	 * @returns Resolves when the sidecar is ready again.
+	 */
+	async restart(): Promise<void> {
+		this.stop();
+		await this.start();
+	}
+
+	/**
+	 * @returns Whether the sidecar process is running.
+	 */
+	isRunning(): boolean {
+		return this.process !== null;
 	}
 
 	/**

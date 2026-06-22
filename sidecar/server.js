@@ -12,6 +12,7 @@ import { SemanticDriftDetector } from './core/SemanticDriftDetector.js';
 import { EditGenomeCollector } from './genome/EditGenomeCollector.js';
 import { AirGapModeManager } from './core/AirGapModeManager.js';
 import { services } from './core/services.js';
+import { countProjectFiles } from './core/pathUtils.js';
 import { mountRoutes } from './routes/index.js';
 
 const PORT = parseInt(process.env.NEUROCODE_PORT || '39291', 10);
@@ -30,7 +31,7 @@ if (AIRGAP && PROJECT_PATH) {
 const app = express();
 app.use(express.json({ limit: '2mb' }));
 
-app.get('/health', async (_req, res) => {
+app.get('/health', async (req, res) => {
 	try {
 		const adapter = await LLMRouter.getAdapter().catch(() => null);
 		const available = adapter ? await adapter.isAvailable().catch(() => false) : false;
@@ -48,6 +49,14 @@ app.get('/health', async (_req, res) => {
 			podState = 'direct-vllm';
 		}
 
+		const projectPath = String(req.query.projectPath ?? '');
+		let fileCount = global.indexStatus?.fileCount ?? 0;
+		let indexed = global.indexStatus?.done ?? false;
+		if (projectPath && services.db) {
+			fileCount = countProjectFiles(services.db, projectPath);
+			indexed = fileCount > 0;
+		}
+
 		res.json({
 			success: true,
 			data: {
@@ -58,8 +67,8 @@ app.get('/health', async (_req, res) => {
 				tokenBudget,
 				podState,
 				idleRemainingMs,
-				indexed: global.indexStatus?.done ?? false,
-				fileCount: global.indexStatus?.fileCount ?? 0,
+				indexed,
+				fileCount,
 			},
 		});
 	} catch (err) {
@@ -69,8 +78,6 @@ app.get('/health', async (_req, res) => {
 		});
 	}
 });
-
-mountRoutes(app);
 
 const db = getDb(PROJECT_PATH);
 services.db = db;
@@ -83,6 +90,8 @@ await vectorStore.init(vectorPath);
 services.vectorStore = vectorStore;
 
 services.shardManager = new ShardManager(db, vectorStore);
+
+mountRoutes(app);
 
 if (PROJECT_PATH) {
 	services.memoryGraph = new ProjectMemoryGraph(PROJECT_PATH);

@@ -12,6 +12,7 @@ import {
 } from '../core/CodeGraph.js';
 import { EmbeddingService } from '../core/EmbeddingService.js';
 import { services } from '../core/services.js';
+import { countProjectFiles, normalizePathKey } from '../core/pathUtils.js';
 
 const router = Router();
 
@@ -77,6 +78,9 @@ router.post('/', async (req, res) => {
 	if (!projectPath) {
 		return res.status(400).json({ success: false, error: 'projectPath required' });
 	}
+	if (!services.db) {
+		return res.status(503).json({ success: false, error: 'Database not ready' });
+	}
 
 	const jobId = randomUUID();
 	const exclude = JSON.parse(process.env.NEUROCODE_INDEX_EXCLUDE || '[]');
@@ -89,17 +93,45 @@ router.post('/', async (req, res) => {
 	jobs.set(jobId, { status: 'running', filesProcessed: 0, totalFiles: files.length });
 
 	void (async () => {
-		for (let i = 0; i < files.length; i++) {
-			await reindexFile(files[i], projectPath);
+		try {
+			for (let i = 0; i < files.length; i++) {
+				await reindexFile(files[i], projectPath);
+				jobs.set(jobId, {
+					status: 'running',
+					filesProcessed: i + 1,
+					totalFiles: files.length,
+				});
+			}
+
+			const storedCount = countProjectFiles(services.db, projectPath);
+			if (files.length > 0 && storedCount === 0) {
+				jobs.set(jobId, {
+					status: 'failed',
+					filesProcessed: 0,
+					totalFiles: files.length,
+				});
+				return;
+			}
+
 			jobs.set(jobId, {
-				status: 'running',
-				filesProcessed: i + 1,
+				status: 'done',
+				filesProcessed: storedCount || files.length,
 				totalFiles: files.length,
 			});
+			global.indexStatus = {
+				done: true,
+				fileCount: storedCount || files.length,
+				projectPath: normalizePathKey(projectPath),
+			};
+			startWatcher(projectPath);
+		} catch (err) {
+			jobs.set(jobId, {
+				status: 'failed',
+				filesProcessed: 0,
+				totalFiles: files.length,
+			});
+			console.error('[indexer] Job failed:', err instanceof Error ? err.message : err);
 		}
-		jobs.set(jobId, { status: 'done', filesProcessed: files.length, totalFiles: files.length });
-		global.indexStatus = { done: true, fileCount: files.length };
-		startWatcher(projectPath);
 	})();
 
 	res.json({ success: true, data: { jobId } });
@@ -112,13 +144,15 @@ router.get('/project-status', (req, res) => {
 			return res.json({ success: true, data: { indexed: false, fileCount: 0 } });
 		}
 
-		const prefix = projectPath.replace(/\\/g, '/');
-		const row = services.db.prepare(
-			`SELECT COUNT(*) as c FROM files WHERE replace(path, '\\', '/') LIKE ? || '%'`,
-		).get(`${prefix}%`);
-
-		const fileCount = row?.c ?? 0;
-		res.json({ success: true, data: { indexed: fileCount > 0, fileCount } });
+		const fileCount = countProjectFiles(services.db, projectPath);
+		res.json({
+			success: true,
+			data: {
+				indexed: fileCount > 0,
+				fileCount,
+				projectPath: normalizePathKey(projectPath),
+			},
+		});
 	} catch (err) {
 		res.status(500).json({
 			success: false,
