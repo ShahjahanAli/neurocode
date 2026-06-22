@@ -21,6 +21,7 @@ import { TaskQueueProvider } from './panels/TaskQueuePanel';
 import { ReviewPanelProvider } from './panels/ReviewPanel';
 import { MemoryPanelProvider } from './panels/MemoryPanel';
 import { DebugPanelProvider } from './panels/DebugPanel';
+import { AutoIndexer } from './services/AutoIndexer';
 
 let sidecarManager: SidecarManager | undefined;
 let statusBarItem: vscode.StatusBarItem | undefined;
@@ -111,7 +112,38 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 	await maybeAutoStartPod(sidecarManager);
 
+	startAutoIndexing(sidecarManager, context);
+
 	logger.log('NeuroCode activated');
+}
+
+/**
+ * Starts background indexing when a workspace opens or changes.
+ * @param sidecar - Sidecar manager instance.
+ * @param context - Extension context for workspace listeners.
+ */
+function startAutoIndexing(sidecar: SidecarManager, context: vscode.ExtensionContext): void {
+	const trigger = (): void => {
+		AutoIndexer.voidAutoIndexWorkspace(sidecar, (progress) => {
+			if (!statusBarItem) {
+				return;
+			}
+			if (progress && progress.totalFiles > 0) {
+				statusBarItem.text =
+					`$(sync~spin) NeuroCode | Indexing ${progress.filesProcessed}/${progress.totalFiles}...`;
+			} else {
+				void refreshHealthStatus();
+			}
+		});
+	};
+
+	trigger();
+
+	context.subscriptions.push(
+		vscode.workspace.onDidChangeWorkspaceFolders(() => {
+			trigger();
+		}),
+	);
 }
 
 /**

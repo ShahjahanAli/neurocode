@@ -2,8 +2,10 @@ import * as vscode from 'vscode';
 import type { SidecarManager } from '../sidecar/SidecarManager';
 import type { AttentionHeatmap } from '../editor/AttentionHeatmap';
 import { getWebviewHtml } from './webviewUtils';
-import { applyEdit, parseCodeBlocks, resolveFileUri, showDiff } from '../utils/DiffApplier';
+import { applyEdit, applyAllCodeBlocks, parseCodeBlocks, resolveFileUri, showDiff } from '../utils/DiffApplier';
 import type { AgentChatData, ChatIntent, ChatTurn } from '../sidecar/types';
+import { AutoIndexer } from '../services/AutoIndexer';
+import { getConfig } from '../utils/config';
 
 /** Last agent response shared with shard visualizer. */
 export let lastAgentResponse: AgentChatData | null = null;
@@ -18,6 +20,7 @@ interface StoredChatMessage {
 	shards?: Array<{ file: string; reason: string; tokenCount: number }>;
 	planId?: string;
 	steps?: Array<{ id: string; description: string; status: string }>;
+	filesApplied?: Array<{ file: string; action: 'created' | 'updated' }>;
 }
 
 /**
@@ -151,30 +154,90 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 	}
 
 	private async ensureIndexed(projectPath: string): Promise<void> {
-		const health = await this.sidecar.client.health();
-		if (health.data?.indexed && (health.data.fileCount ?? 0) > 0) {
+		const count = await AutoIndexer.getProjectFileCount(this.sidecar, projectPath);
+		if (count > 0) {
 			return;
 		}
 
 		this.post({ type: 'indexing', message: 'Indexing project so NeuroCode can read your code…' });
 
-		const start = await this.sidecar.client.startIndex(projectPath);
-		if (!start.success || !start.data?.jobId) {
-			return;
+		try {
+			const indexed = await AutoIndexer.ensureIndexed(this.sidecar, projectPath, {
+				silent: true,
+				onProgress: (p) => {
+					this.post({
+						type: 'indexing',
+						message: `Indexing ${p.filesProcessed}/${p.totalFiles} files…`,
+					});
+				},
+			});
+			this.post({ type: 'indexingDone', fileCount: indexed });
+		} catch {
+			this.post({ type: 'indexingDone', fileCount: 0 });
+		}
+	}
+
+	/** @param response - LLM response text. */
+	private isTruncatedResponse(response: string): boolean {
+		const fences = (response.match(/```/g) ?? []).length;
+		return fences % 2 !== 0;
+	}
+
+	/**
+	 * Auto-applies code blocks when implement mode is active.
+	 * @param data - Agent chat response.
+	 * @param projectPath - Workspace root.
+	 */
+	private async maybeAutoApplyEdits(
+		data: AgentChatData,
+		projectPath: string,
+	): Promise<AgentChatData> {
+		if (data.intent !== 'edit' || !getConfig().chat.autoApply) {
+			return data;
 		}
 
-		const jobId = start.data.jobId;
-		for (let i = 0; i < 120; i++) {
-			await new Promise((r) => setTimeout(r, 1000));
-			const status = await this.sidecar.client.indexStatus(jobId);
-			if (status.data?.status === 'done') {
-				this.post({ type: 'indexingDone', fileCount: status.data.filesProcessed });
-				return;
-			}
-			if (status.data?.status === 'failed') {
-				break;
-			}
+		const blocks = parseCodeBlocks(data.response).filter((b) => b.filename);
+		if (blocks.length === 0) {
+			return {
+				...data,
+				response: `${data.response}\n\n---\n**Note:** No files were written. Say **"implement …"** or **"go for it"** to apply code to your project.`,
+			};
 		}
+
+		const result = await applyAllCodeBlocks(data.response, projectPath);
+		const truncated = this.isTruncatedResponse(data.response);
+		let response = data.response;
+
+		if (result.applied.length > 0) {
+			const summary = result.applied
+				.map((f) => `- \`${f.file}\` (${f.action})`)
+				.join('\n');
+			response = `${data.response}\n\n---\n**Applied to your project:**\n${summary}`;
+			void vscode.window.showInformationMessage(
+				`NeuroCode: Applied ${result.applied.length} file(s)`,
+			);
+			void this.sidecar.client.post('/memory/record', {
+				taskDescription: 'auto-applied edit',
+				filesEdited: result.applied.map((f) => f.file),
+				diffAccepted: true,
+				provider: data.provider,
+			});
+		}
+
+		if (truncated) {
+			response += '\n\n⚠️ **Response may be truncated.** Say **"continue"** to finish remaining code.';
+		}
+
+		if (result.failed.length > 0) {
+			response += `\n\n**Failed to write:** ${result.failed.join(', ')}`;
+		}
+
+		return {
+			...data,
+			response,
+			filesApplied: result.applied,
+			truncated,
+		};
 	}
 
 	/**
@@ -228,32 +291,35 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 						},
 					);
 
+					const finalData = await this.maybeAutoApplyEdits(data, folder!.uri.fsPath);
+
 					this.appendStoredMessage({
 						role: 'assistant',
-						text: data.response,
-						provider: data.provider,
-						modelUsed: data.modelUsed,
-						intent: data.intent,
-						shards: data.shardsUsed,
-						planId: data.planId,
-						steps: data.steps,
+						text: finalData.response,
+						provider: finalData.provider,
+						modelUsed: finalData.modelUsed,
+						intent: finalData.intent,
+						shards: finalData.shardsUsed,
+						planId: finalData.planId,
+						steps: finalData.steps,
+						filesApplied: finalData.filesApplied,
 					});
 
-					lastAgentResponse = data;
-					this.heatmap.apply(data.attentionMap, editor?.document.uri.fsPath);
+					lastAgentResponse = finalData;
+					this.heatmap.apply(finalData.attentionMap, editor?.document.uri.fsPath);
 
 					this.post({
 						type: 'agentResponse',
-						data,
+						data: finalData,
 					});
 
 					void this.sidecar.client.post('/memory/record', {
 						taskDescription: task,
-						filesEdited: data.shardsUsed.map((s) => s.file),
-						diffAccepted: false,
-						latencyMs: data.latencyMs,
-						modelUsed: data.modelUsed,
-						provider: data.provider,
+						filesEdited: finalData.filesApplied?.map((f) => f.file) ?? finalData.shardsUsed.map((s) => s.file),
+						diffAccepted: (finalData.filesApplied?.length ?? 0) > 0,
+						latencyMs: finalData.latencyMs,
+						modelUsed: finalData.modelUsed,
+						provider: finalData.provider,
 					});
 				} catch (err) {
 					const errText = err instanceof Error ? err.message : String(err);
@@ -379,20 +445,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 			}
 			case 'acceptDiff': {
 				const blocks = parseCodeBlocks(msg.text ?? '');
-				const block = blocks[0];
-				if (!block?.filename || !folder) {
+				if (!folder || blocks.length === 0) {
 					return;
 				}
-				const uri = resolveFileUri(block.filename, folder.uri.fsPath);
-				if (uri) {
-					await applyEdit(uri, block.code);
-					void this.sidecar.client.post('/memory/record', {
-						taskDescription: msg.task ?? 'accepted edit',
-						filesEdited: [block.filename],
-						diffAccepted: true,
-						provider: 'unknown',
-					});
-				}
+				const result = await applyAllCodeBlocks(msg.text ?? '', folder.uri.fsPath);
+				void vscode.window.showInformationMessage(
+					`NeuroCode: Applied ${result.applied.length} file(s)`,
+				);
 				break;
 			}
 			case 'startPod':

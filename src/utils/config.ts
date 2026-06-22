@@ -20,6 +20,7 @@ export interface ShardConfig {
 /** Indexing configuration. */
 export interface IndexingConfig {
 	excludePatterns: string[];
+	autoIndex: boolean;
 }
 
 /** Sidecar process configuration. */
@@ -56,6 +57,7 @@ export interface NeuroCodeConfig {
 	review: { parallelAgents: number; agents: string[] };
 	drift: { enabled: boolean; threshold: number };
 	crossrepo: { enabled: boolean; sharedIndexPath: string };
+	chat: { autoApply: boolean };
 }
 
 /**
@@ -83,6 +85,7 @@ export function getConfig(): NeuroCodeConfig {
 			excludePatterns: cfg.get<string[]>('indexing.excludePatterns', [
 				'node_modules', '.git', 'dist', 'build', '.next',
 			]),
+			autoIndex: cfg.get<boolean>('indexing.autoIndex', true),
 		},
 		sidecar: {
 			port: cfg.get<number>('sidecar.port', 39291),
@@ -123,6 +126,9 @@ export function getConfig(): NeuroCodeConfig {
 		crossrepo: {
 			enabled: cfg.get<boolean>('crossrepo.enabled', false),
 			sharedIndexPath: cfg.get<string>('crossrepo.sharedIndexPath', ''),
+		},
+		chat: {
+			autoApply: cfg.get<boolean>('chat.autoApply', true),
 		},
 	};
 }

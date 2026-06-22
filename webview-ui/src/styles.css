@@ -42,7 +42,15 @@ body {
   color: var(--nc-accent);
 }
 
-.messages { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+.messages {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  overscroll-behavior: contain;
+}
 
 .chat-panel { height: 100vh; max-height: 100vh; }
 
@@ -96,6 +104,17 @@ body {
 .shards-details { margin-top: 8px; font-size: 0.85em; color: var(--nc-muted); }
 
 .action-row { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+
+.applied-files {
+  margin-top: 8px;
+  padding: 8px;
+  border-radius: 6px;
+  background: rgba(74, 255, 155, 0.08);
+  border: 1px solid rgba(74, 255, 155, 0.35);
+  font-size: 0.85em;
+}
+.applied-files ul { margin: 4px 0 0; padding-left: 18px; }
+.action-tag { color: #4AFF9B; font-size: 0.85em; }
 
 .chat-toolbar { display: flex; justify-content: flex-end; }
 .toolbar-btn { font-size: 0.75em; padding: 4px 8px; }

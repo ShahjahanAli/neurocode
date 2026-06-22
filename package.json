@@ -31,6 +31,7 @@
     "offline"
   ],
   "activationEvents": [
+    "onStartupFinished",
     "onCommand:neurocode.askAgent",
     "onCommand:neurocode.planTask",
     "onCommand:neurocode.indexProject",
@@ -207,6 +208,11 @@
           "type": "array",
           "default": ["node_modules", ".git", "dist", "build", ".next"]
         },
+        "neurocode.indexing.autoIndex": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically index the workspace when NeuroCode activates or a folder is opened."
+        },
         "neurocode.sidecar.port": {
           "type": "number",
           "default": 39291
@@ -297,6 +303,11 @@
         "neurocode.crossrepo.sharedIndexPath": {
           "type": "string",
           "default": ""
+        },
+        "neurocode.chat.autoApply": {
+          "type": "boolean",
+          "default": true,
+          "description": "When true, Implement mode automatically writes generated files to the workspace (like Cursor)."
         }
       }
     }

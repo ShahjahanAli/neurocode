@@ -105,6 +105,28 @@ router.post('/', async (req, res) => {
 	res.json({ success: true, data: { jobId } });
 });
 
+router.get('/project-status', (req, res) => {
+	try {
+		const projectPath = String(req.query.projectPath ?? '');
+		if (!projectPath || !services.db) {
+			return res.json({ success: true, data: { indexed: false, fileCount: 0 } });
+		}
+
+		const prefix = projectPath.replace(/\\/g, '/');
+		const row = services.db.prepare(
+			`SELECT COUNT(*) as c FROM files WHERE replace(path, '\\', '/') LIKE ? || '%'`,
+		).get(`${prefix}%`);
+
+		const fileCount = row?.c ?? 0;
+		res.json({ success: true, data: { indexed: fileCount > 0, fileCount } });
+	} catch (err) {
+		res.status(500).json({
+			success: false,
+			error: err instanceof Error ? err.message : String(err),
+		});
+	}
+});
+
 router.get('/status/:jobId', (req, res) => {
 	const job = jobs.get(req.params.jobId);
 	if (!job) {

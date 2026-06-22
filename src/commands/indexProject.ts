@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import type { SidecarManager } from '../sidecar/SidecarManager';
+import { AutoIndexer } from '../services/AutoIndexer';
 
 /**
  * Registers the Index Project command.
@@ -20,30 +21,20 @@ export function registerIndexProject(
 
 			try {
 				await vscode.window.withProgress(
-					{ location: vscode.ProgressLocation.Notification, title: 'NeuroCode: Indexing...' },
-					async () => {
-						const start = await sidecar.client.startIndex(folder.uri.fsPath);
-						if (!start.success || !start.data) {
-							throw new Error(start.error ?? 'Failed to start indexing');
-						}
-
-						const jobId = start.data.jobId;
-						for (;;) {
-							await new Promise((r) => setTimeout(r, 1000));
-							const status = await sidecar.client.indexStatus(jobId);
-							if (!status.success || !status.data) {
-								throw new Error(status.error ?? 'Index status failed');
-							}
-							if (status.data.status === 'done') {
-								void vscode.window.showInformationMessage(
-									`Indexed ${status.data.filesProcessed} files`,
-								);
-								return;
-							}
-							if (status.data.status === 'failed') {
-								throw new Error('Indexing failed');
-							}
-						}
+					{
+						location: vscode.ProgressLocation.Notification,
+						title: 'NeuroCode: Indexing...',
+						cancellable: false,
+					},
+					async (progress) => {
+						await AutoIndexer.runIndex(sidecar, folder.uri.fsPath, {
+							silent: false,
+							onProgress: (p) => {
+								progress.report({
+									message: `${p.filesProcessed}/${p.totalFiles} files`,
+								});
+							},
+						});
 					},
 				);
 			} catch (err: unknown) {

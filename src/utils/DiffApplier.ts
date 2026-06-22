@@ -82,6 +82,94 @@ export async function applyEdit(fileUri: vscode.Uri, newContent: string): Promis
 }
 
 /**
+ * Ensures parent directories exist for a workspace-relative file path.
+ * @param workspaceRoot - Workspace folder path.
+ * @param filename - Relative file path.
+ */
+async function ensureParentDirectories(workspaceRoot: string, filename: string): Promise<void> {
+	const parts = filename.replace(/\\/g, '/').split('/').filter(Boolean);
+	if (parts.length <= 1) {
+		return;
+	}
+	let current = vscode.Uri.file(workspaceRoot);
+	for (let i = 0; i < parts.length - 1; i++) {
+		current = vscode.Uri.joinPath(current, parts[i]);
+		try {
+			await vscode.workspace.fs.createDirectory(current);
+		} catch {
+			// directory may already exist
+		}
+	}
+}
+
+/**
+ * Creates or overwrites a file in the workspace.
+ * @param workspaceRoot - Workspace folder path.
+ * @param filename - Relative path from LLM output.
+ * @param content - Full file content.
+ * @returns Whether the file was created, updated, or failed.
+ */
+export async function createOrApplyFile(
+	workspaceRoot: string,
+	filename: string,
+	content: string,
+): Promise<'created' | 'updated' | 'failed'> {
+	const uri = resolveFileUri(filename, workspaceRoot);
+	if (!uri) {
+		return 'failed';
+	}
+
+	await ensureParentDirectories(workspaceRoot, filename);
+	const encoder = new TextEncoder();
+
+	try {
+		await vscode.workspace.fs.stat(uri);
+		await applyEdit(uri, content);
+		return 'updated';
+	} catch {
+		try {
+			await vscode.workspace.fs.writeFile(uri, encoder.encode(content));
+			return 'created';
+		} catch {
+			return 'failed';
+		}
+	}
+}
+
+/** Result of applying multiple code blocks. */
+export interface ApplyBlocksResult {
+	applied: Array<{ file: string; action: 'created' | 'updated' }>;
+	failed: string[];
+}
+
+/**
+ * Applies all code blocks from an LLM response to the workspace.
+ * @param text - Raw LLM response.
+ * @param workspaceRoot - Workspace folder path.
+ * @returns Summary of applied and failed files.
+ */
+export async function applyAllCodeBlocks(
+	text: string,
+	workspaceRoot: string,
+): Promise<ApplyBlocksResult> {
+	const blocks = parseCodeBlocks(text).filter((b) => b.filename);
+	const applied: ApplyBlocksResult['applied'] = [];
+	const failed: string[] = [];
+
+	for (const block of blocks) {
+		const filename = block.filename!;
+		const result = await createOrApplyFile(workspaceRoot, filename, block.code);
+		if (result === 'failed') {
+			failed.push(filename);
+		} else {
+			applied.push({ file: filename, action: result });
+		}
+	}
+
+	return { applied, failed };
+}
+
+/**
  * Resolves a filename from LLM output to a workspace URI.
  * @param filename - Relative or absolute path from code block.
  * @param workspaceRoot - Workspace folder path.

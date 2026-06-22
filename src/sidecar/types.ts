@@ -100,6 +100,8 @@ export interface AgentChatData extends AgentAskData {
 	}>;
 	indexed?: boolean;
 	fileCount?: number;
+	filesApplied?: Array<{ file: string; action: 'created' | 'updated' }>;
+	truncated?: boolean;
 }
 
 /** SSE chunk from POST /agent/chat/stream. */

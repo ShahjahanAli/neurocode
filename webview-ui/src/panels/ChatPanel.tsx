@@ -17,6 +17,7 @@ interface Message {
 	planId?: string;
 	steps?: Array<{ id: string; description: string; status: string }>;
 	streaming?: boolean;
+	filesApplied?: Array<{ file: string; action: 'created' | 'updated' }>;
 }
 
 const QUICK_PROMPTS = [
@@ -29,7 +30,7 @@ const QUICK_PROMPTS = [
 const INTENT_LABELS: Record<ChatIntent, string> = {
 	chat: 'Explain',
 	plan: 'Plan',
-	edit: 'Edit',
+	edit: 'Implement',
 };
 
 export function ChatPanel() {
@@ -43,7 +44,33 @@ export function ChatPanel() {
 	const [cost, setCost] = useState<{ estimatedCostUsd?: number; sessionMinutes?: number; llmCalls?: number }>();
 	const [indexing, setIndexing] = useState<string | null>(null);
 	const [genomeConsent, setGenomeConsent] = useState(true);
-	const messagesEndRef = useRef<HTMLDivElement>(null);
+	const messagesContainerRef = useRef<HTMLDivElement>(null);
+	const stickToBottomRef = useRef(true);
+
+	/** @returns Whether the scroll position is near the bottom of the message list. */
+	const isNearBottom = (el: HTMLElement, threshold = 48): boolean =>
+		el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+
+	/** Scrolls the message list to the bottom when the user is following the stream. */
+	const scrollToBottom = (behavior: ScrollBehavior = 'auto'): void => {
+		const el = messagesContainerRef.current;
+		if (!el) {
+			return;
+		}
+		if (behavior === 'auto') {
+			el.scrollTop = el.scrollHeight;
+		} else {
+			el.scrollTo({ top: el.scrollHeight, behavior });
+		}
+	};
+
+	const handleMessagesScroll = (): void => {
+		const el = messagesContainerRef.current;
+		if (!el) {
+			return;
+		}
+		stickToBottomRef.current = isNearBottom(el);
+	};
 
 	useEffect(() => {
 		vscode.postMessage({ type: 'webviewReady' });
@@ -58,6 +85,8 @@ export function ChatPanel() {
 			if (msg.type === 'restoreChat') {
 				setMessages(msg.messages ?? []);
 				setLoading(false);
+				stickToBottomRef.current = true;
+				requestAnimationFrame(() => scrollToBottom('auto'));
 			}
 			if (msg.type === 'appendMessage') {
 				setMessages((m) => [...m, msg.message]);
@@ -71,6 +100,7 @@ export function ChatPanel() {
 			if (msg.type === 'streamStart') {
 				setLoading(true);
 				setStreamIntent(null);
+				stickToBottomRef.current = true;
 				setMessages((m) => [...m, { role: 'assistant', text: '', streaming: true }]);
 			}
 			if (msg.type === 'streamIntent') {
@@ -108,6 +138,7 @@ export function ChatPanel() {
 						shards: msg.data.shardsUsed,
 						planId: msg.data.planId,
 						steps: msg.data.steps,
+						filesApplied: msg.data.filesApplied,
 					}];
 				});
 			}
@@ -133,11 +164,17 @@ export function ChatPanel() {
 	}, [vscode]);
 
 	useEffect(() => {
-		messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+		if (!stickToBottomRef.current) {
+			return;
+		}
+		// Instant scroll during streaming avoids fighting manual scroll gestures.
+		const behavior: ScrollBehavior = loading ? 'auto' : 'smooth';
+		requestAnimationFrame(() => scrollToBottom(behavior));
 	}, [messages, loading]);
 
 	const send = (task: string, forceIntent?: ChatIntent) => {
 		if (!task.trim() || loading) return;
+		stickToBottomRef.current = true;
 		vscode.postMessage({ type: 'askAgent', task, forceIntent });
 		setInput('');
 	};
@@ -168,7 +205,11 @@ export function ChatPanel() {
 			{indexing && (
 				<div className="indexing-banner">{indexing}</div>
 			)}
-			<div className="messages">
+			<div
+				className="messages"
+				ref={messagesContainerRef}
+				onScroll={handleMessagesScroll}
+			>
 				{messages.length === 0 && (
 					<div className="welcome-card">
 						<h3>NeuroCode Chat</h3>
@@ -228,6 +269,17 @@ export function ChatPanel() {
 							</details>
 						)}
 
+						{m.filesApplied && m.filesApplied.length > 0 && (
+							<div className="applied-files">
+								<strong>Written to project:</strong>
+								<ul>
+									{m.filesApplied.map((f) => (
+										<li key={f.file}>{f.file} <span className="action-tag">{f.action}</span></li>
+									))}
+								</ul>
+							</div>
+						)}
+
 						{m.planId && !loading && (
 							<div className="action-row">
 								<button type="button" onClick={() => vscode.postMessage({ type: 'executePlanStep', planId: m.planId })}>
@@ -248,7 +300,6 @@ export function ChatPanel() {
 						)}
 					</div>
 				))}
-				<div ref={messagesEndRef} />
 			</div>
 
 			<div className="chat-toolbar">

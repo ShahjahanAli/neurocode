@@ -26,7 +26,7 @@ Rules:
 - If context is truly empty, tell them to run **NeuroCode: Index Project** from the Command Palette
 - Keep explanations concise but thorough
 - Always end with a "## Suggested next steps" section containing 2–4 short, actionable bullets
-- If the user might want implementation, mention they can say "implement …" or "plan …" for a step-by-step plan`;
+- If the user might want implementation, tell them to say **"implement …"** or **"go for it"** to write code directly into the project`;
 
 /**
  * Classifies user message intent for routing.
@@ -35,6 +35,18 @@ Rules:
  */
 export function classifyIntent(message) {
 	const m = message.toLowerCase().trim();
+
+	// Explicit implementation requests (Cursor-style "do it")
+	if (
+		/\b(go for|implement|build it|code it|apply it|do it now|make it|ship it|write the code|add the code)\b/.test(m) ||
+		/\b(number|#|item|option|feature)\s*\d+\b/.test(m) ||
+		/^go for\b/.test(m) ||
+		/^implement\b/.test(m) ||
+		/^build\b/.test(m) ||
+		/^continue\b/.test(m)
+	) {
+		return 'edit';
+	}
 
 	const isQuestion =
 		/\b(what|why|how|explain|describe|tell me|can you check|can you read|review|analyze|analyse|understand|look at|thoughts on|feedback on|read this)\b/.test(m) ||
@@ -56,6 +68,20 @@ export function classifyIntent(message) {
 	}
 
 	return 'chat';
+}
+
+/**
+ * @param {'chat' | 'plan' | 'edit'} intent
+ * @returns {number}
+ */
+export function getMaxTokensForIntent(intent) {
+	if (intent === 'edit') {
+		return Math.min(4000, Math.max(2000, LLMRouter.getTokenBudget() - 500));
+	}
+	if (intent === 'chat') {
+		return 2500;
+	}
+	return 1500;
 }
 
 /**
@@ -195,7 +221,7 @@ export async function runOrchestratedChat(services, params) {
 	} else {
 		const messages = services.shardManager.buildMessagesForIntent(intent, task, shards, history);
 		const temp = intent === 'chat' ? 0.5 : 0.1;
-		const maxTokens = intent === 'chat' ? 2000 : 1500;
+		const maxTokens = getMaxTokensForIntent(intent);
 		response = await adapter.chat(messages, { temperature: temp, max_tokens: maxTokens });
 	}
 
@@ -292,7 +318,7 @@ export async function streamOrchestratedChat(services, params, write) {
 		} else {
 			const messages = services.shardManager.buildMessagesForIntent(intent, task, shards, history);
 			const temp = intent === 'chat' ? 0.5 : 0.1;
-			const maxTokens = intent === 'chat' ? 2000 : 1500;
+			const maxTokens = getMaxTokensForIntent(intent);
 
 			for await (const token of adapter.stream(messages, { temperature: temp, max_tokens: maxTokens })) {
 				response += token;

@@ -59,7 +59,7 @@ export class ShardManager {
 			if (shards.length === 0) {
 				return this.buildChatPrompt(task, shards, history);
 			}
-			return this.buildEditPrompt(task, shards);
+			return this.buildEditPrompt(task, shards, history);
 		}
 
 		return this.buildChatPrompt(task, shards, history);
@@ -93,28 +93,42 @@ export class ShardManager {
 	/**
 	 * @param {string} task
 	 * @param {Array<{relativeFile: string, content: string, reason: string}>} shards
+	 * @param {Array<{role: string, content: string}>} [history]
 	 * @returns {Array<{role: string, content: string}>}
 	 */
-	buildEditPrompt(task, shards) {
+	buildEditPrompt(task, shards, history = []) {
 		const contextBlock = this.formatContextBlock(shards);
 
-		const systemPrompt = `You are NeuroCode — an expert software engineer helping implement code changes.
+		const systemPrompt = `You are NeuroCode — an expert software engineer implementing real code changes in the user's project (like Cursor or Copilot).
 
-Analyze the provided code context, then complete the task.
-Only edit files that appear in the context below — do not invent placeholder files.
-Output the modified code in a fenced block with the filename as a comment on line 1.
-You may include a brief 1–2 sentence summary BEFORE the code block explaining what you changed.
+Your job is to WRITE CODE INTO THE PROJECT, not to write tutorials.
 
-Format:
+Rules:
+- Output one fenced code block per file changed or created
+- Each block MUST start with: // filename: relative/path/from/project/root
+- Output COMPLETE file contents — never truncate mid-function or mid-string
+- Create NEW files when the task requires them (e.g. lib/analytics/service.ts)
+- Match existing project conventions (imports, TypeScript, Next.js app router, Drizzle, etc.)
+- Keep prose minimal: at most 2 sentences before the first code block, then code only
+- If the task references a numbered item from earlier conversation, implement THAT item using conversation context
+
+Format for each file:
 \`\`\`typescript
-// filename: relative/path/to/file.ts
-[complete modified file or relevant section]
+// filename: lib/example.ts
+[complete file content]
 \`\`\``;
 
-		return [
-			{ role: 'system', content: systemPrompt },
-			{ role: 'user', content: `Context:\n${contextBlock}\n\nTask: ${task}` },
-		];
+		const messages = [{ role: 'system', content: systemPrompt }];
+		for (const turn of trimHistory(history)) {
+			if (turn.role === 'user' || turn.role === 'assistant') {
+				messages.push({ role: turn.role, content: turn.content });
+			}
+		}
+		messages.push({
+			role: 'user',
+			content: `Project context:\n${contextBlock}\n\nImplement this task in the codebase:\n${task}`,
+		});
+		return messages;
 	}
 
 	/**
@@ -123,7 +137,7 @@ Format:
 	 * @returns {Array<{role: string, content: string}>}
 	 */
 	buildPrompt(task, shards) {
-		return this.buildEditPrompt(task, shards);
+		return this.buildEditPrompt(task, shards, []);
 	}
 
 	/**
