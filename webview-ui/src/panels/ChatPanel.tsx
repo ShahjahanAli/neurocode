@@ -19,6 +19,7 @@ interface Message {
 	streaming?: boolean;
 	filesApplied?: Array<{ file: string; action: 'created' | 'updated' }>;
 	truncated?: boolean;
+	sourceText?: string;
 }
 
 const QUICK_PROMPTS = [
@@ -141,6 +142,7 @@ export function ChatPanel() {
 						steps: msg.data.steps,
 						filesApplied: msg.data.filesApplied,
 						truncated: msg.data.truncated,
+						sourceText: msg.sourceText ?? msg.data.response,
 					}];
 				});
 			}
@@ -296,7 +298,16 @@ export function ChatPanel() {
 									View Diff
 								</button>
 								{(!m.filesApplied || m.filesApplied.length === 0) && (
-									<button type="button" onClick={() => vscode.postMessage({ type: 'acceptDiff', text: m.text, truncated: m.truncated })}>
+									<button
+										type="button"
+										onClick={() => vscode.postMessage({
+											type: 'acceptDiff',
+											text: m.text,
+											sourceText: m.sourceText,
+											truncated: m.truncated,
+											shardFiles: m.shards?.map((s) => s.file),
+										})}
+									>
 										Accept
 									</button>
 								)}

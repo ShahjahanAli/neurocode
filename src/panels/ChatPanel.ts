@@ -22,6 +22,8 @@ interface StoredChatMessage {
 	steps?: Array<{ id: string; description: string; status: string }>;
 	filesApplied?: Array<{ file: string; action: 'created' | 'updated' }>;
 	truncated?: boolean;
+	/** Raw LLM output before NeuroCode status footers (used for Apply). */
+	sourceText?: string;
 }
 
 /**
@@ -111,7 +113,22 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
 	/** Sends stored messages to the webview. */
 	private postRestoreChat(): void {
-		this.post({ type: 'restoreChat', messages: this.uiMessages });
+		this.post({
+			type: 'restoreChat',
+			messages: this.uiMessages.map((m) => ({
+				role: m.role,
+				text: m.text,
+				sourceText: m.sourceText,
+				provider: m.provider,
+				modelUsed: m.modelUsed,
+				intent: m.intent,
+				shards: m.shards,
+				planId: m.planId,
+				steps: m.steps,
+				filesApplied: m.filesApplied,
+				truncated: m.truncated,
+			})),
+		});
 	}
 
 	/** Opens or focuses the chat view. */
@@ -196,7 +213,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 	}
 
 	/** @returns Options for parsing code blocks from the active editor context. */
-	private getApplyOptions(): ParseCodeBlocksOptions {
+	private getApplyOptions(shards?: Array<{ file: string }>): ParseCodeBlocksOptions {
 		const editor = vscode.window.activeTextEditor;
 		const folder = vscode.workspace.workspaceFolders?.[0];
 		const fallbackFilename =
@@ -207,6 +224,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 		return {
 			allowIncomplete: true,
 			fallbackFilename,
+			workspaceRoot: folder?.uri.fsPath,
+			hintFilenames: shards?.map((s) => s.file) ?? [],
 		};
 	}
 
@@ -255,6 +274,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 			this.appendStoredMessage({
 				role: 'assistant',
 				text: finalData.response,
+				sourceText: data.response,
 				provider: finalData.provider,
 				modelUsed: finalData.modelUsed,
 				intent: finalData.intent,
@@ -271,6 +291,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 			this.post({
 				type: 'agentResponse',
 				data: finalData,
+				sourceText: data.response,
 			});
 
 			void this.sidecar.client.post('/memory/record', {
@@ -320,7 +341,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 			return data;
 		}
 
-		const applyOptions = this.getApplyOptions();
+		const applyOptions = this.getApplyOptions(data.shardsUsed);
 		const blocks = parseCodeBlocks(data.response, applyOptions).filter((b) => b.filename);
 		if (blocks.length === 0) {
 			return {
@@ -375,10 +396,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 		type: string;
 		task?: string;
 		text?: string;
+		sourceText?: string;
 		planId?: string;
 		forceIntent?: ChatIntent;
 		truncated?: boolean;
 		appliedFiles?: string[];
+		shardFiles?: string[];
 	}): Promise<void> {
 		const folder = vscode.workspace.workspaceFolders?.[0];
 		if (!folder && msg.type === 'askAgent') {
@@ -488,7 +511,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 				break;
 			case 'viewDiff': {
 				const rawText = stripNeuroCodeAppendix(msg.text ?? '');
-				const blocks = parseCodeBlocks(rawText, this.getApplyOptions());
+				const shards = msg.shardFiles?.map((file) => ({ file }));
+				const blocks = parseCodeBlocks(rawText, this.getApplyOptions(shards));
 				const block = blocks[0];
 				if (!block?.filename || !folder) {
 					void vscode.window.showWarningMessage(
@@ -506,14 +530,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 				if (!folder) {
 					return;
 				}
-				const rawText = stripNeuroCodeAppendix(msg.text ?? '');
-				const applyOptions = this.getApplyOptions();
+				const rawText = stripNeuroCodeAppendix(msg.sourceText ?? msg.text ?? '');
+				const shards = msg.shardFiles?.map((file) => ({ file }));
+				const applyOptions = this.getApplyOptions(shards);
 				const parsed = parseCodeBlocks(rawText, applyOptions);
 				const result = await applyAllCodeBlocks(rawText, folder.uri.fsPath, applyOptions);
 
 				if (result.applied.length === 0) {
+					const withPath = parsed.filter((b) => b.filename).length;
 					void vscode.window.showWarningMessage(
-						`NeuroCode: Applied 0 file(s). Found ${parsed.length} code block(s) — add // filename: src/path/file.ts as the first line inside each block.`,
+						`NeuroCode: Applied 0 file(s). Parsed ${parsed.length} block(s), ${withPath} with paths. Open the target file in the editor and try again, or ensure blocks include // filename: src/path/file.ts`,
 					);
 					break;
 				}

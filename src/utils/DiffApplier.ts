@@ -13,12 +13,32 @@ export interface ParseCodeBlocksOptions {
 	allowIncomplete?: boolean;
 	/** Used when a single block has no detectable path (e.g. active editor file). */
 	fallbackFilename?: string;
+	/** Shard / context file paths to assign when blocks lack explicit paths. */
+	hintFilenames?: string[];
+	/** Workspace root for relativizing absolute hint paths. */
+	workspaceRoot?: string;
 }
+
+const CODE_EXT =
+	/\.(tsx?|jsx?|py|go|rs|java|php|vue|svelte|css|scss|json|md|html|mjs|cjs)$/i;
 
 const FILE_HEADER_RE =
 	/^\s*(?:\/\/|#)\s*(?:filename|file|path)\s*:\s*(.+?)\s*$/i;
 const BLOCK_COMMENT_HEADER_RE =
 	/^\s*\/\*\s*(?:filename|file|path)\s*:\s*(.+?)\s*\*\/\s*$/i;
+const PLAIN_PATH_COMMENT_RE =
+	/^\s*\/\/\s*([\w./@-]+\.[a-z0-9]+)\s*$/i;
+const PLAIN_PATH_HASH_RE =
+	/^\s*#\s*([\w./@-]+\.[a-z0-9]+)\s*$/i;
+const FILE_LABEL_RE =
+	/^\s*(?:\/\/|#|\/\*)?\s*(?:file|path)\s*:\s*(.+?)\s*(?:\*\/)?\s*$/i;
+const AT_FILE_RE = /^\s*@file\s+(.+?)\s*$/i;
+
+const PATH_IN_TEXT_RE =
+	/(?:filename|file|path)\s*:\s*[`"']?([^\s`"'\n]+)/gi;
+const BACKTICK_PATH_RE = /`((?:[\w.-]+\/)+[\w.-]+\.[a-z0-9]+)`/gi;
+const LOOSE_PATH_RE =
+	/\b((?:src|app|lib|components|pages|api|server|sidecar|webview-ui)\/[\w./-]+\.[a-z0-9]+)\b/gi;
 
 /**
  * Removes NeuroCode status appendices from a stored assistant message.
@@ -29,6 +49,7 @@ export function stripNeuroCodeAppendix(text: string): string {
 	const markers = [
 		'\n---\n**Applied to your project:**',
 		'\n---\n**Note:**',
+		'\n\n⚠️ **Response was cut off.**',
 		'\n\n⚠️ **Response may be truncated.**',
 		'\n\n**Failed to write:**',
 	];
@@ -51,7 +72,38 @@ function normalizeFilename(raw: string): string {
 		.trim()
 		.replace(/^['"`]+|['"`]+$/g, '')
 		.replace(/\\/g, '/')
-		.replace(/^\.\//, '');
+		.replace(/^\.\//, '')
+		.replace(/^\/+/, '');
+}
+
+/**
+ * @param filePath - Absolute or relative path.
+ * @param workspaceRoot - Workspace root for relativizing.
+ * @returns Normalized project-relative path.
+ */
+function relativizePath(filePath: string, workspaceRoot?: string): string {
+	const normalized = normalizeFilename(filePath);
+	if (!workspaceRoot) {
+		return normalized;
+	}
+	const root = workspaceRoot.replace(/\\/g, '/').replace(/\/$/, '').toLowerCase();
+	const candidate = normalized.replace(/\\/g, '/');
+	if (/^[A-Za-z]:/.test(candidate) || candidate.startsWith('/')) {
+		const lower = candidate.toLowerCase();
+		if (lower.startsWith(`${root}/`)) {
+			return candidate.slice(root.length + 1);
+		}
+	}
+	return normalized;
+}
+
+/**
+ * @param path - Candidate file path.
+ * @returns Whether the string looks like a source file path.
+ */
+function looksLikeFilePath(path: string): boolean {
+	const p = normalizeFilename(path);
+	return Boolean(p) && (p.includes('/') || CODE_EXT.test(p));
 }
 
 /**
@@ -64,15 +116,49 @@ function filenameFromFenceTag(tag: string): string | undefined {
 		return undefined;
 	}
 
-	const afterColon = trimmed.includes(':')
-		? trimmed.split(':').slice(1).join(':').trim()
-		: trimmed;
+	if (trimmed.includes(':')) {
+		const afterColon = trimmed.split(':').slice(1).join(':').trim();
+		if (looksLikeFilePath(afterColon)) {
+			return normalizeFilename(afterColon);
+		}
+	}
 
-	if (
-		/\/|\\/.test(afterColon) ||
-		/\.(tsx?|jsx?|py|go|rs|java|php|vue|svelte|css|scss|json|md)$/i.test(afterColon)
-	) {
-		return normalizeFilename(afterColon);
+	if (looksLikeFilePath(trimmed) && !/^(typescript|javascript|tsx|jsx|python|json|bash|sh|sql|html|css)$/i.test(trimmed)) {
+		return normalizeFilename(trimmed);
+	}
+
+	return undefined;
+}
+
+/**
+ * @param line - Single source line.
+ * @returns Extracted path if present.
+ */
+function extractPathFromLine(line: string): string | undefined {
+	const checks = [
+		FILE_HEADER_RE,
+		BLOCK_COMMENT_HEADER_RE,
+		AT_FILE_RE,
+		FILE_LABEL_RE,
+		PLAIN_PATH_COMMENT_RE,
+		PLAIN_PATH_HASH_RE,
+	];
+
+	for (const re of checks) {
+		const m = line.match(re);
+		if (m?.[1] && looksLikeFilePath(m[1])) {
+			return normalizeFilename(m[1]);
+		}
+	}
+
+	const bold = line.match(/\*\*([^*]+\.[a-z0-9]+)\*\*/i);
+	if (bold?.[1] && looksLikeFilePath(bold[1])) {
+		return normalizeFilename(bold[1]);
+	}
+
+	const inline = line.match(/`([^`]+\.[a-z0-9]+)`/i);
+	if (inline?.[1] && looksLikeFilePath(inline[1])) {
+		return normalizeFilename(inline[1]);
 	}
 
 	return undefined;
@@ -83,18 +169,65 @@ function filenameFromFenceTag(tag: string): string | undefined {
  * @returns Filename and index where code content starts.
  */
 function extractFilenameFromBody(lines: string[]): { filename?: string; codeStart: number } {
-	for (let i = 0; i < Math.min(lines.length, 4); i++) {
-		const line = lines[i] ?? '';
-		const slash = line.match(FILE_HEADER_RE);
-		if (slash) {
-			return { filename: normalizeFilename(slash[1]), codeStart: i + 1 };
-		}
-		const block = line.match(BLOCK_COMMENT_HEADER_RE);
-		if (block) {
-			return { filename: normalizeFilename(block[1]), codeStart: i + 1 };
+	for (let i = 0; i < Math.min(lines.length, 6); i++) {
+		const path = extractPathFromLine(lines[i] ?? '');
+		if (path) {
+			return { filename: path, codeStart: i + 1 };
 		}
 	}
 	return { codeStart: 0 };
+}
+
+/**
+ * @param preamble - Text appearing immediately before a fenced code block.
+ * @returns Inferred filename, if any.
+ */
+function filenameFromPreamble(preamble: string): string | undefined {
+	const tail = preamble.slice(-1200);
+	const lines = tail.split('\n').reverse();
+	for (const line of lines) {
+		const path = extractPathFromLine(line);
+		if (path) {
+			return path;
+		}
+	}
+	return undefined;
+}
+
+/**
+ * @param text - Full response text.
+ * @returns Ordered unique path mentions found in prose.
+ */
+function extractMentionedPaths(text: string): string[] {
+	const found: string[] = [];
+	const seen = new Set<string>();
+
+	const add = (raw: string): void => {
+		const path = normalizeFilename(raw);
+		if (!looksLikeFilePath(path) || seen.has(path)) {
+			return;
+		}
+		seen.add(path);
+		found.push(path);
+	};
+
+	let match: RegExpExecArray | null;
+	PATH_IN_TEXT_RE.lastIndex = 0;
+	while ((match = PATH_IN_TEXT_RE.exec(text)) !== null) {
+		add(match[1]);
+	}
+
+	BACKTICK_PATH_RE.lastIndex = 0;
+	while ((match = BACKTICK_PATH_RE.exec(text)) !== null) {
+		add(match[1]);
+	}
+
+	LOOSE_PATH_RE.lastIndex = 0;
+	while ((match = LOOSE_PATH_RE.exec(text)) !== null) {
+		add(match[1]);
+	}
+
+	return found;
 }
 
 /**
@@ -116,6 +249,68 @@ function parseBlockBody(tag: string, body: string): ParsedCodeBlock {
 }
 
 /**
+ * Parses unfenced sections that start with // filename: headers (Qwen raw output).
+ * @param source - Response text.
+ * @returns Parsed blocks without fences.
+ */
+function parseUnfencedFileSections(source: string): ParsedCodeBlock[] {
+	const blocks: ParsedCodeBlock[] = [];
+	const headerRe = /(?:^|\n)\/\/\s*(?:filename|file|path)\s*:\s*(.+)\r?\n/g;
+	const matches = [...source.matchAll(headerRe)];
+	if (matches.length === 0) {
+		return blocks;
+	}
+
+	for (let i = 0; i < matches.length; i++) {
+		const m = matches[i];
+		const filename = normalizeFilename(m[1]);
+		const start = (m.index ?? 0) + m[0].length;
+		const end = i + 1 < matches.length ? (matches[i + 1].index ?? source.length) : source.length;
+		let code = source.slice(start, end).trim();
+		if (code.includes('```')) {
+			continue;
+		}
+		if (code && looksLikeFilePath(filename)) {
+			blocks.push({ filename, language: 'plaintext', code });
+		}
+	}
+
+	return blocks;
+}
+
+/**
+ * Assigns filenames to blocks using hints and mentioned paths.
+ * @param blocks - Parsed blocks (mutated in place).
+ * @param options - Parsing options.
+ * @param source - Full source text for path mention extraction.
+ */
+function resolveBlockFilenames(
+	blocks: ParsedCodeBlock[],
+	options: ParseCodeBlocksOptions,
+	source: string,
+): void {
+	const mentioned = extractMentionedPaths(source);
+	const hints = (options.hintFilenames ?? [])
+		.map((f) => relativizePath(f, options.workspaceRoot))
+		.filter(looksLikeFilePath);
+	const pool = [...mentioned, ...hints.filter((h) => !mentioned.includes(h))];
+
+	for (const block of blocks) {
+		if (block.filename || !block.code.trim()) {
+			continue;
+		}
+		const next = pool.shift();
+		if (next) {
+			block.filename = next;
+		}
+	}
+
+	if (blocks.length === 1 && !blocks[0].filename && options.fallbackFilename) {
+		blocks[0].filename = relativizePath(options.fallbackFilename, options.workspaceRoot);
+	}
+}
+
+/**
  * Extracts code blocks from LLM responses (Qwen3 and generic formats).
  * @param text - Raw LLM response text.
  * @param options - Parsing options.
@@ -124,31 +319,48 @@ function parseBlockBody(tag: string, body: string): ParsedCodeBlock {
 export function parseCodeBlocks(text: string, options: ParseCodeBlocksOptions = {}): ParsedCodeBlock[] {
 	const source = stripNeuroCodeAppendix(text);
 	const blocks: ParsedCodeBlock[] = [];
-	const closedRe = /```([^\n`]*)\n([\s\S]*?)```/g;
+	const closedRe = /```([^\n`]*)\r?\n([\s\S]*?)```/g;
 	let match: RegExpExecArray | null;
+	let lastEnd = 0;
 
 	while ((match = closedRe.exec(source)) !== null) {
-		blocks.push(parseBlockBody(match[1], match[2]));
+		const preamble = source.slice(lastEnd, match.index);
+		const block = parseBlockBody(match[1], match[2]);
+		if (!block.filename) {
+			block.filename = filenameFromPreamble(preamble);
+		}
+		if (block.code.trim()) {
+			blocks.push(block);
+		}
+		lastEnd = match.index + match[0].length;
+	}
+
+	if (blocks.length === 0) {
+		blocks.push(...parseUnfencedFileSections(source));
 	}
 
 	if (options.allowIncomplete) {
 		const fenceCount = (source.match(/```/g) ?? []).length;
 		if (fenceCount % 2 !== 0) {
 			const lastOpen = source.lastIndexOf('```');
+			const preamble = source.slice(lastEnd, lastOpen);
 			const tail = source.slice(lastOpen + 3);
 			const newline = tail.indexOf('\n');
 			const tag = newline === -1 ? tail.trim() : tail.slice(0, newline).trim();
 			const body = newline === -1 ? '' : tail.slice(newline + 1);
 			if (tag || body.trim()) {
-				blocks.push(parseBlockBody(tag, body));
+				const block = parseBlockBody(tag, body);
+				if (!block.filename) {
+					block.filename = filenameFromPreamble(preamble);
+				}
+				if (block.code.trim()) {
+					blocks.push(block);
+				}
 			}
 		}
 	}
 
-	if (blocks.length === 1 && !blocks[0].filename && options.fallbackFilename) {
-		blocks[0].filename = normalizeFilename(options.fallbackFilename);
-	}
-
+	resolveBlockFilenames(blocks, options, source);
 	return blocks;
 }
 
@@ -267,7 +479,10 @@ export async function applyAllCodeBlocks(
 	workspaceRoot: string,
 	options: ParseCodeBlocksOptions = {},
 ): Promise<ApplyBlocksResult> {
-	const blocks = parseCodeBlocks(text, options);
+	const blocks = parseCodeBlocks(text, {
+		...options,
+		workspaceRoot: options.workspaceRoot ?? workspaceRoot,
+	});
 	const applied: ApplyBlocksResult['applied'] = [];
 	const failed: string[] = [];
 	let unresolved = 0;
@@ -304,7 +519,12 @@ export function resolveFileUri(filename: string, workspaceRoot: string): vscode.
 		return undefined;
 	}
 	const normalized = normalizeFilename(filename);
-	if (normalized.startsWith('/') || /^[A-Za-z]:/.test(normalized)) {
+	if (/^[A-Za-z]:/.test(normalized) || normalized.startsWith('/')) {
+		const root = workspaceRoot.replace(/\\/g, '/').replace(/\/$/, '').toLowerCase();
+		const lower = normalized.toLowerCase();
+		if (lower.startsWith(`${root}/`)) {
+			return vscode.Uri.file(normalized);
+		}
 		return vscode.Uri.file(normalized);
 	}
 	return vscode.Uri.joinPath(vscode.Uri.file(workspaceRoot), normalized);
