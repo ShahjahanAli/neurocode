@@ -6,7 +6,7 @@ import { applyEdit, applyAllCodeBlocks, parseCodeBlocks, resolveFileUri, showDif
 import { buildContinuePrompt, isTruncatedResponse as isTruncatedLlmResponse, mergeContinuation } from '../utils/CodeBatchMerger';
 import type { AgentChatData, ChatIntent, ChatMode, ChatTurn } from '../sidecar/types';
 import { AutoIndexer } from '../services/AutoIndexer';
-import { getConfig } from '../utils/config';
+import { getConfig, getChatViewId } from '../utils/config';
 
 /** Last agent response shared with shard visualizer. */
 export let lastAgentResponse: AgentChatData | null = null;
@@ -132,9 +132,21 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 		});
 	}
 
-	/** Opens or focuses the chat view. */
+	/** Opens or focuses the chat view (right secondary sidebar by default, Cursor-style). */
 	static async reveal(): Promise<void> {
-		await vscode.commands.executeCommand('neurocode.chatView.focus');
+		if (getConfig().ui.chatLocation === 'right') {
+			try {
+				await vscode.commands.executeCommand('workbench.action.focusAuxiliaryBar');
+			} catch {
+				try {
+					await vscode.commands.executeCommand('workbench.action.toggleAuxiliaryBar');
+				} catch {
+					// VS Code builds without auxiliary bar — view still focuses if visible
+				}
+			}
+		}
+
+		await vscode.commands.executeCommand(`${getChatViewId()}.focus`);
 	}
 
 	/**
@@ -358,6 +370,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 		};
 	}
 
+	/** @param text - User message. */
+	private isSocialAcknowledgment(text: string): boolean {
+		return /^(thanks?|thank you|thx|ty|cheers|appreciated|much appreciated|got it|cool|nice|perfect|great|awesome)\b[!. ]*$/i.test(
+			text.trim(),
+		);
+	}
+
 	/**
 	 * Runs a chat agent request with streaming.
 	 * @param task - User task text.
@@ -392,25 +411,41 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 		try {
 			await this.ensureIndexed(folder.uri.fsPath);
 
-			const data = await this.runImplementBatch(
-				task,
-				folder,
-				editor,
-				forceIntent,
-				options,
-			);
+			const effectiveOptions = this.isSocialAcknowledgment(task)
+				? { ...options, chatMode: 'explain' as ChatMode }
+				: options;
+
+			const cfg = getConfig();
+			const activeMode = effectiveOptions?.chatMode ?? cfg.chat.mode;
+
+			let rawData: AgentChatData;
+			if (activeMode === 'agent' && !options?.isManualContinue) {
+				rawData = await this.runToolAgentLoop(task, folder, editor);
+			} else {
+				rawData = await this.runImplementBatch(
+					task,
+					folder,
+					editor,
+					forceIntent,
+					effectiveOptions,
+				);
+			}
 
 			let finalData = await this.maybeApplyOrphanCode(
-				await this.maybeAutoApplyEdits(data, folder.uri.fsPath),
+				await this.maybeAutoApplyEdits(rawData, folder.uri.fsPath),
 				folder.uri.fsPath,
 			);
 
-			const cfg = getConfig();
-			const shouldRunAgent =
-				finalData.planId &&
-				(finalData.agentic || (options?.chatMode ?? cfg.chat.mode) === 'agent');
+			if (this.isSocialAcknowledgment(task)) {
+				finalData = { ...finalData, intent: 'chat', filesApplied: undefined };
+			}
 
-			if (shouldRunAgent && finalData.planId) {
+			const shouldRunPlanAgent =
+				activeMode !== 'agent' &&
+				finalData.planId &&
+				finalData.agentic;
+
+			if (shouldRunPlanAgent && finalData.planId) {
 				finalData = await this.runAgenticPlanLoop(
 					finalData,
 					folder,
@@ -421,7 +456,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 			this.appendStoredMessage({
 				role: 'assistant',
 				text: finalData.response,
-				sourceText: data.response,
+				sourceText: rawData.response,
 				provider: finalData.provider,
 				modelUsed: finalData.modelUsed,
 				intent: finalData.intent,
@@ -438,7 +473,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 			this.post({
 				type: 'agentResponse',
 				data: finalData,
-				sourceText: data.response,
+				sourceText: rawData.response,
 			});
 
 			void this.sidecar.client.post('/memory/record', {
@@ -476,6 +511,119 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 				},
 			});
 		}
+	}
+
+	/**
+	 * Runs the Cursor-style agent tool loop (read → search → write → reply).
+	 * @param task - User task.
+	 * @param folder - Workspace folder.
+	 * @param editor - Active editor, if any.
+	 */
+	private async runToolAgentLoop(
+		task: string,
+		folder: vscode.WorkspaceFolder,
+		editor: vscode.TextEditor | undefined,
+	): Promise<AgentChatData> {
+		const cfg = getConfig();
+
+		const data = await this.sidecar.client.agentLoopStream(
+			{
+				task,
+				activeFile: editor?.document.uri.fsPath,
+				cursorLine: editor?.selection.active.line,
+				projectPath: folder.uri.fsPath,
+				history: this.conversationHistory.slice(0, -1),
+				maxSteps: cfg.chat.agentToolMaxSteps,
+			},
+			(chunk) => {
+				if (chunk.type === 'intent') {
+					this.post({
+						type: 'streamIntent',
+						intent: chunk.intent,
+						agentic: true,
+					});
+				}
+				if (chunk.type === 'step') {
+					this.post({
+						type: 'batchProgress',
+						round: chunk.step ?? 1,
+						message: `Agent step ${chunk.step}/${chunk.maxSteps}…`,
+					});
+				}
+				if (chunk.type === 'tool_start' && chunk.tool) {
+					this.post({
+						type: 'batchProgress',
+						round: 1,
+						message: `Tool: ${chunk.tool}…`,
+					});
+				}
+				if (chunk.type === 'token' && chunk.content) {
+					this.post({ type: 'streamToken', content: chunk.content });
+				}
+			},
+		);
+
+		this.post({ type: 'batchProgress', round: 0 });
+
+		if (!cfg.chat.autoApply || !data.pendingWrites?.length) {
+			return data;
+		}
+
+		const applied = await this.applyPendingWrites(data.pendingWrites, folder.uri.fsPath);
+		if (applied.length === 0) {
+			return data;
+		}
+
+		void vscode.window.showInformationMessage(
+			`NeuroCode Agent: Applied ${applied.length} file(s)`,
+		);
+
+		const summary = applied
+			.map((f) => `- \`${f.file}\` (${f.action})`)
+			.join('\n');
+
+		return {
+			...data,
+			intent: 'edit',
+			agentic: true,
+			filesApplied: applied,
+			response: `${data.response}\n\n---\n**Applied to your project:**\n${summary}`,
+		};
+	}
+
+	/**
+	 * Writes staged agent tool outputs to the workspace.
+	 * @param writes - Pending write_file tool results.
+	 * @param projectPath - Workspace root.
+	 */
+	private async applyPendingWrites(
+		writes: Array<{ path: string; content: string }>,
+		projectPath: string,
+	): Promise<Array<{ file: string; action: 'created' | 'updated' }>> {
+		const applied: Array<{ file: string; action: 'created' | 'updated' }> = [];
+
+		for (const write of writes) {
+			const uri = resolveFileUri(write.path, projectPath);
+			if (!uri) {
+				continue;
+			}
+
+			let existed = false;
+			try {
+				await vscode.workspace.fs.stat(uri);
+				existed = true;
+			} catch {
+				existed = false;
+			}
+
+			await vscode.workspace.fs.writeFile(uri, Buffer.from(write.content, 'utf8'));
+			applied.push({
+				file: write.path.replace(/\\/g, '/'),
+				action: existed ? 'updated' : 'created',
+			});
+		}
+
+		return applied;
 	}
 
 	/**

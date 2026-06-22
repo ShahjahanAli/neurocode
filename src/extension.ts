@@ -12,7 +12,7 @@ import { registerStopPod } from './commands/stopPod';
 import { registerShowCostReport } from './commands/showCostReport';
 import { SidecarManager } from './sidecar/SidecarManager';
 import type { HealthData } from './sidecar/types';
-import { getConfig } from './utils/config';
+import { getConfig, getChatViewId } from './utils/config';
 import { logger } from './utils/logger';
 import { AttentionHeatmap } from './editor/AttentionHeatmap';
 import { ChatPanelProvider } from './panels/ChatPanel';
@@ -89,8 +89,25 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	shardProvider = new ShardVisualizerProvider(context.extensionUri);
 	debugProvider = new DebugPanelProvider(context.extensionUri);
 
+	const syncChatLocationContext = (): void => {
+		const location = getConfig().ui.chatLocation;
+		void vscode.commands.executeCommand('setContext', 'neurocode.chatLocation', location);
+	};
+	syncChatLocationContext();
+	context.subscriptions.push(
+		vscode.workspace.onDidChangeConfiguration((e) => {
+			if (e.affectsConfiguration('neurocode.ui.chatLocation')) {
+				syncChatLocationContext();
+				void vscode.window.showInformationMessage(
+					'NeuroCode: Reload the window (Developer: Reload Window) to apply chat panel location.',
+				);
+			}
+		}),
+	);
+
 	context.subscriptions.push(
 		vscode.window.registerWebviewViewProvider('neurocode.chatView', chatProvider),
+		vscode.window.registerWebviewViewProvider('neurocode.chatViewLeft', chatProvider),
 		vscode.window.registerWebviewViewProvider('neurocode.shardsView', shardProvider),
 		vscode.window.registerWebviewViewProvider('neurocode.tasksView', new TaskQueueProvider(context.extensionUri, sidecarManager)),
 		vscode.window.registerWebviewViewProvider('neurocode.reviewView', new ReviewPanelProvider(context.extensionUri, sidecarManager)),

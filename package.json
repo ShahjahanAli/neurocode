@@ -34,6 +34,7 @@
     "onStartupFinished",
     "workspaceContains:**/*",
     "onView:neurocode.chatView",
+    "onView:neurocode.chatViewLeft",
     "onCommand:neurocode.askAgent",
     "onCommand:neurocode.planTask",
     "onCommand:neurocode.indexProject",
@@ -123,14 +124,30 @@
           "title": "NeuroCode",
           "icon": "media/icon.svg"
         }
+      ],
+      "secondarySidebar": [
+        {
+          "id": "neurocode-chat",
+          "title": "NeuroCode",
+          "icon": "media/icon.svg"
+        }
       ]
     },
     "views": {
-      "neurocode-sidebar": [
+      "neurocode-chat": [
         {
           "type": "webview",
           "id": "neurocode.chatView",
-          "name": "Chat"
+          "name": "Chat",
+          "when": "neurocode.chatLocation == right"
+        }
+      ],
+      "neurocode-sidebar": [
+        {
+          "type": "webview",
+          "id": "neurocode.chatViewLeft",
+          "name": "Chat",
+          "when": "neurocode.chatLocation == left"
         },
         {
           "type": "webview",
@@ -339,7 +356,20 @@
           "default": 8,
           "minimum": 1,
           "maximum": 12,
-          "description": "Maximum plan steps to auto-execute in Agent mode."
+          "description": "Maximum plan steps to auto-execute in legacy plan-agent mode."
+        },
+        "neurocode.chat.agentToolMaxSteps": {
+          "type": "number",
+          "default": 10,
+          "minimum": 1,
+          "maximum": 20,
+          "description": "Maximum tool-call iterations per Agent mode request (read/search/write loop)."
+        },
+        "neurocode.ui.chatLocation": {
+          "type": "string",
+          "enum": ["right", "left"],
+          "default": "right",
+          "description": "Where the Chat panel opens: right secondary sidebar (Cursor-style) or left activity bar with other NeuroCode views."
         }
       }
     }

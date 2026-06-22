@@ -58,6 +58,7 @@ export interface NeuroCodeConfig {
 	review: { parallelAgents: number; agents: string[] };
 	drift: { enabled: boolean; threshold: number };
 	crossrepo: { enabled: boolean; sharedIndexPath: string };
+	ui: { chatLocation: 'right' | 'left' };
 	chat: {
 		mode: ChatMode;
 		autoApply: boolean;
@@ -65,7 +66,17 @@ export interface NeuroCodeConfig {
 		maxContinueRounds: number;
 		fixOnCheck: boolean;
 		agentMaxSteps: number;
+		agentToolMaxSteps: number;
 	};
+}
+
+/**
+ * @returns Webview view id for the chat panel based on UI settings.
+ */
+export function getChatViewId(): string {
+	return getConfig().ui.chatLocation === 'left'
+		? 'neurocode.chatViewLeft'
+		: 'neurocode.chatView';
 }
 
 /**
@@ -135,6 +146,9 @@ export function getConfig(): NeuroCodeConfig {
 			enabled: cfg.get<boolean>('crossrepo.enabled', false),
 			sharedIndexPath: cfg.get<string>('crossrepo.sharedIndexPath', ''),
 		},
+		ui: {
+			chatLocation: cfg.get<'right' | 'left'>('ui.chatLocation', 'right'),
+		},
 		chat: {
 			mode: cfg.get<ChatMode>('chat.mode', 'auto'),
 			autoApply: cfg.get<boolean>('chat.autoApply', true),
@@ -142,6 +156,7 @@ export function getConfig(): NeuroCodeConfig {
 			maxContinueRounds: cfg.get<number>('chat.maxContinueRounds', 8),
 			fixOnCheck: cfg.get<boolean>('chat.fixOnCheck', true),
 			agentMaxSteps: cfg.get<number>('chat.agentMaxSteps', 8),
+			agentToolMaxSteps: cfg.get<number>('chat.agentToolMaxSteps', 10),
 		},
 	};
 }

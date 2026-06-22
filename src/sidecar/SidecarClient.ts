@@ -179,6 +179,35 @@ export class SidecarClient {
 	}
 
 	/**
+	 * Streams an agent tool loop via SSE.
+	 * @param request - Agent loop request.
+	 * @param onChunk - Handler for step, tool, token, done, and error events.
+	 * @returns Final assembled agent response from the done event.
+	 */
+	async agentLoopStream(
+		request: AgentChatRequest,
+		onChunk: (chunk: AgentChatStreamChunk) => void,
+	): Promise<AgentChatData> {
+		let result: AgentChatData | undefined;
+
+		await this.stream('/agent/loop/stream', (raw) => {
+			const chunk = raw as AgentChatStreamChunk;
+			onChunk(chunk);
+			if (chunk.type === 'done' && chunk.data) {
+				result = chunk.data;
+			}
+			if (chunk.type === 'error') {
+				throw new Error(chunk.message ?? 'Agent loop failed');
+			}
+		}, request);
+
+		if (!result) {
+			throw new Error('Agent loop ended without a response');
+		}
+		return result;
+	}
+
+	/**
 	 * @param task - High-level task description.
 	 * @param projectPath - Absolute project path.
 	 */

@@ -15,8 +15,13 @@ import {
  * @property {string} [reason]
  */
 
-const AFFIRMATIVE_RE =
-	/^(yes|yep|yeah|yup|ok|okay|sure|please|thanks|do it|go ahead|go for it|sounds good|that works|let'?s do it|make it happen|please do|do that|do this|apply it|ship it|implement it)\b/i;
+/** Short social replies — never trigger implement. */
+const SOCIAL_ACK_RE =
+	/^(thanks?|thank you|thx|ty|cheers|appreciated|much appreciated|got it|cool|nice|perfect|great|awesome|lovely|wonderful|good to know|noted|ok thanks|okay thanks)\b[!. ]*$/i;
+
+/** Clear consent to proceed with code changes — NOT gratitude. */
+const CONSENT_RE =
+	/^(yes|yep|yeah|yup|ok|okay|sure|do it|go ahead|go for it|sounds good|that works|let'?s do it|make it happen|please do|do that|do this|apply it|ship it|implement it)\b/i;
 
 const NEGATIVE_RE = /^(no|nope|don'?t|wait|stop|not yet|hold on)\b/i;
 
@@ -89,6 +94,41 @@ function lastUserTurn(history) {
 }
 
 /**
+ * @param {string} content
+ * @returns {boolean}
+ */
+function isWorkCompleteMessage(content) {
+	const lower = content.toLowerCase();
+	return (
+		lower.includes('applied to your project') ||
+		lower.includes('written to project') ||
+		lower.includes('agent complete') ||
+		lower.includes('all plan steps are complete')
+	);
+}
+
+/**
+ * Assistant message is offering a next action — not reporting finished work.
+ * @param {string} content
+ * @returns {boolean}
+ */
+function isPendingImplementOffer(content) {
+	if (isWorkCompleteMessage(content)) {
+		return false;
+	}
+
+	const lower = content.toLowerCase();
+	return (
+		lower.includes('suggested next steps') ||
+		lower.includes('say **implement') ||
+		lower.includes('say **yes') ||
+		lower.includes('go for it') ||
+		/\b(would you like me to|shall i|want me to|should i implement|ready to implement|want me to proceed)\b/.test(lower) ||
+		/\d+\.\s+\*\*[^*]+\*\*/.test(content)
+	);
+}
+
+/**
  * Infers implement task from conversation when user affirms or picks an option.
  * @param {string} message
  * @param {Array<{role: string, content: string}>} history
@@ -101,6 +141,10 @@ function inferFollowUpTask(message, history) {
 		return null;
 	}
 
+	if (SOCIAL_ACK_RE.test(trimmed)) {
+		return null;
+	}
+
 	if (NEGATIVE_RE.test(trimmed)) {
 		return null;
 	}
@@ -110,31 +154,26 @@ function inferFollowUpTask(message, history) {
 		return `Implement option ${optionMatch[2]} from your previous response. Use the conversation context and write the code into the project.`;
 	}
 
-	if (!AFFIRMATIVE_RE.test(trimmed) && trimmed.split(/\s+/).length > 6) {
+	if (!CONSENT_RE.test(trimmed) && trimmed.split(/\s+/).length > 6) {
 		return null;
 	}
 
-	const assistant = lastAssistant.content.toLowerCase();
-	const offeredImplement =
-		assistant.includes('suggested next steps') ||
-		assistant.includes('implement') ||
-		assistant.includes('finish ') ||
-		assistant.includes('go for it') ||
-		assistant.includes('say **implement') ||
-		/\d+\.\s+\*\*/.test(lastAssistant.content);
-
-	if (AFFIRMATIVE_RE.test(trimmed) && offeredImplement) {
-		const lastUser = lastUserTurn(history);
-		return lastUser?.content
-			? `Proceed with the implementation discussed. Original request: ${lastUser.content}`
-			: 'Proceed with the implementation you suggested in your last message. Write code into the project.';
+	if (!CONSENT_RE.test(trimmed)) {
+		return null;
 	}
 
-	if (AFFIRMATIVE_RE.test(trimmed) && lastAssistant.content.includes('plan')) {
+	if (!isPendingImplementOffer(lastAssistant.content)) {
+		return null;
+	}
+
+	if (lastAssistant.content.toLowerCase().includes('plan')) {
 		return 'Execute the plan you outlined — implement the first actionable steps in the codebase.';
 	}
 
-	return null;
+	const lastUser = lastUserTurn(history);
+	return lastUser?.content
+		? `Proceed with the implementation discussed. Original request: ${lastUser.content}`
+		: 'Proceed with the implementation you suggested in your last message. Write code into the project.';
 }
 
 /**
@@ -187,11 +226,15 @@ function scoreIntents(message, history) {
 		scores.edit += 5;
 	}
 
-	if (/\b(yes|go ahead|do it|sounds good)\b/.test(m)) {
+	if (/\b(yes|go ahead|do it|sounds good)\b/.test(m) && !SOCIAL_ACK_RE.test(m)) {
 		const followUp = inferFollowUpTask(message, history);
 		if (followUp) {
 			scores.edit += 6;
 		}
+	}
+
+	if (SOCIAL_ACK_RE.test(m)) {
+		scores.chat += 8;
 	}
 
 	// Short imperative commands without question marks → likely edit
@@ -251,6 +294,17 @@ export function resolveUserIntent(task, options = {}) {
 	}
 	if (chatMode === 'agent') {
 		return { intent: 'plan', effectiveTask: task, autoFixed: false, agentic: true, reason: 'mode:agent' };
+	}
+
+	const trimmed = task.trim();
+	if (SOCIAL_ACK_RE.test(trimmed)) {
+		return {
+			intent: 'chat',
+			effectiveTask: task,
+			autoFixed: false,
+			agentic: false,
+			reason: 'social:acknowledgment',
+		};
 	}
 
 	const followUpTask = inferFollowUpTask(task, history);

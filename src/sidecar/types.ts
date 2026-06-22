@@ -91,6 +91,7 @@ export interface AgentChatRequest {
 	forceIntent?: ChatIntent;
 	chatMode?: ChatMode;
 	fixOnCheck?: boolean;
+	maxSteps?: number;
 }
 
 /** Unified chat response data. */
@@ -108,13 +109,22 @@ export interface AgentChatData extends AgentAskData {
 	fileCount?: number;
 	filesApplied?: Array<{ file: string; action: 'created' | 'updated' }>;
 	truncated?: boolean;
+	pendingWrites?: Array<{ path: string; content: string }>;
+	toolLog?: Array<{ tool: string; args?: unknown; result?: unknown }>;
+	mode?: string;
 }
 
-/** SSE chunk from POST /agent/chat/stream. */
+/** SSE chunk from POST /agent/chat/stream or /agent/loop/stream. */
 export interface AgentChatStreamChunk {
-	type: 'intent' | 'token' | 'done' | 'error';
+	type: 'intent' | 'token' | 'done' | 'error' | 'step' | 'tool_start' | 'tool_result';
 	intent?: ChatIntent;
 	agentic?: boolean;
+	mode?: string;
+	step?: number;
+	maxSteps?: number;
+	tool?: string;
+	args?: unknown;
+	result?: unknown;
 	content?: string;
 	data?: AgentChatData;
 	message?: string;

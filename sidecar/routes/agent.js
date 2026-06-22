@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import { LLMRouter } from '../core/LLMRouter.js';
 import { services } from '../core/services.js';
 import { runOrchestratedChat, streamOrchestratedChat } from '../core/ChatOrchestrator.js';
+import { streamAgentToolLoop } from '../core/AgentToolLoop.js';
 
 const router = Router();
 
@@ -153,6 +154,38 @@ router.post('/chat/stream', async (req, res) => {
 	await streamOrchestratedChat(
 		services,
 		{ task, activeFile, projectPath, history, forceIntent, chatMode, fixOnCheck },
+		(event) => {
+			res.write(`data: ${JSON.stringify(event)}\n\n`);
+		},
+	);
+
+	res.write('data: [DONE]\n\n');
+	res.end();
+});
+
+router.post('/loop/stream', async (req, res) => {
+	res.setHeader('Content-Type', 'text/event-stream');
+	res.setHeader('Cache-Control', 'no-cache');
+	res.setHeader('Connection', 'keep-alive');
+	res.flushHeaders();
+
+	const {
+		task,
+		activeFile,
+		projectPath,
+		history,
+		maxSteps,
+	} = req.body ?? {};
+
+	if (!task || !projectPath) {
+		res.write(`data: ${JSON.stringify({ type: 'error', message: 'task and projectPath required' })}\n\n`);
+		res.write('data: [DONE]\n\n');
+		return res.end();
+	}
+
+	await streamAgentToolLoop(
+		services,
+		{ task, activeFile, projectPath, history, maxSteps },
 		(event) => {
 			res.write(`data: ${JSON.stringify(event)}\n\n`);
 		},
