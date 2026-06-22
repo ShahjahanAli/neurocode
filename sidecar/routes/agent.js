@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { randomUUID } from 'crypto';
 import { LLMRouter } from '../core/LLMRouter.js';
 import { services } from '../core/services.js';
+import { runOrchestratedChat, streamOrchestratedChat } from '../core/ChatOrchestrator.js';
 
 const router = Router();
 
@@ -108,6 +109,55 @@ router.post('/ask', async (req, res) => {
 			error: err instanceof Error ? err.message : String(err),
 		});
 	}
+});
+
+router.post('/chat', async (req, res) => {
+	try {
+		const { task, activeFile, projectPath, history, forceIntent } = req.body ?? {};
+		if (!task || !projectPath) {
+			return res.status(400).json({ success: false, error: 'task and projectPath required' });
+		}
+
+		const data = await runOrchestratedChat(services, {
+			task,
+			activeFile,
+			projectPath,
+			history,
+			forceIntent,
+		});
+
+		res.json({ success: true, data });
+	} catch (err) {
+		res.status(500).json({
+			success: false,
+			error: err instanceof Error ? err.message : String(err),
+		});
+	}
+});
+
+router.post('/chat/stream', async (req, res) => {
+	res.setHeader('Content-Type', 'text/event-stream');
+	res.setHeader('Cache-Control', 'no-cache');
+	res.setHeader('Connection', 'keep-alive');
+	res.flushHeaders();
+
+	const { task, activeFile, projectPath, history, forceIntent } = req.body ?? {};
+	if (!task || !projectPath) {
+		res.write(`data: ${JSON.stringify({ type: 'error', message: 'task and projectPath required' })}\n\n`);
+		res.write('data: [DONE]\n\n');
+		return res.end();
+	}
+
+	await streamOrchestratedChat(
+		services,
+		{ task, activeFile, projectPath, history, forceIntent },
+		(event) => {
+			res.write(`data: ${JSON.stringify(event)}\n\n`);
+		},
+	);
+
+	res.write('data: [DONE]\n\n');
+	res.end();
 });
 
 router.post('/plan', async (req, res) => {

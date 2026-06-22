@@ -67,6 +67,46 @@ export interface AgentAskData {
 	latencyMs: number;
 }
 
+/** Chat intent modes routed by the orchestrator. */
+export type ChatIntent = 'chat' | 'plan' | 'edit';
+
+/** Conversation turn for multi-turn chat. */
+export interface ChatTurn {
+	role: 'user' | 'assistant';
+	content: string;
+}
+
+/** Unified chat request (Cursor-like). */
+export interface AgentChatRequest {
+	task: string;
+	activeFile?: string;
+	cursorLine?: number;
+	projectPath: string;
+	history?: ChatTurn[];
+	forceIntent?: ChatIntent;
+}
+
+/** Unified chat response data. */
+export interface AgentChatData extends AgentAskData {
+	intent: ChatIntent;
+	planId?: string;
+	steps?: Array<{
+		id: string;
+		description: string;
+		dependsOn: string[];
+		status: string;
+	}>;
+}
+
+/** SSE chunk from POST /agent/chat/stream. */
+export interface AgentChatStreamChunk {
+	type: 'intent' | 'token' | 'done' | 'error';
+	intent?: ChatIntent;
+	content?: string;
+	data?: AgentChatData;
+	message?: string;
+}
+
 /** Plan creation response. */
 export interface PlanData {
 	planId: string;

@@ -3,10 +3,10 @@ import type { SidecarManager } from '../sidecar/SidecarManager';
 import type { AttentionHeatmap } from '../editor/AttentionHeatmap';
 import { getWebviewHtml } from './webviewUtils';
 import { applyEdit, parseCodeBlocks, resolveFileUri, showDiff } from '../utils/DiffApplier';
-import type { AgentAskData } from '../sidecar/types';
+import type { AgentChatData, ChatIntent, ChatTurn } from '../sidecar/types';
 
 /** Last agent response shared with shard visualizer. */
-export let lastAgentResponse: AgentAskData | null = null;
+export let lastAgentResponse: AgentChatData | null = null;
 
 /**
  * NeuroCode Chat sidebar WebView provider.
@@ -14,6 +14,7 @@ export let lastAgentResponse: AgentAskData | null = null;
 export class ChatPanelProvider implements vscode.WebviewViewProvider {
 	private view?: vscode.WebviewView;
 	private podPollTimer?: ReturnType<typeof setInterval>;
+	private conversationHistory: ChatTurn[] = [];
 
 	/**
 	 * @param extensionUri - Extension root URI.
@@ -96,7 +97,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 	/**
 	 * @param msg - Message from webview.
 	 */
-	private async handleMessage(msg: { type: string; task?: string; text?: string }): Promise<void> {
+	private async handleMessage(msg: {
+		type: string;
+		task?: string;
+		text?: string;
+		planId?: string;
+		forceIntent?: ChatIntent;
+	}): Promise<void> {
 		const folder = vscode.workspace.workspaceFolders?.[0];
 		if (!folder && msg.type === 'askAgent') {
 			this.post({ type: 'error', message: 'Open a workspace folder first.' });
@@ -107,38 +114,127 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 			case 'askAgent': {
 				this.heatmap.clear();
 				const editor = vscode.window.activeTextEditor;
+				const task = msg.task ?? '';
+				this.conversationHistory.push({ role: 'user', content: task });
+
 				this.post({ type: 'streamStart' });
 
-				const res = await this.sidecar.client.askAgent({
-					task: msg.task ?? '',
+				try {
+					const data = await this.sidecar.client.chatStream(
+						{
+							task,
+							activeFile: editor?.document.uri.fsPath,
+							cursorLine: editor?.selection.active.line,
+							projectPath: folder!.uri.fsPath,
+							history: this.conversationHistory.slice(0, -1),
+							forceIntent: msg.forceIntent,
+						},
+						(chunk) => {
+							if (chunk.type === 'intent') {
+								this.post({ type: 'streamIntent', intent: chunk.intent });
+							}
+							if (chunk.type === 'token' && chunk.content) {
+								this.post({ type: 'streamToken', content: chunk.content });
+							}
+						},
+					);
+
+					this.conversationHistory.push({ role: 'assistant', content: data.response });
+					if (this.conversationHistory.length > 16) {
+						this.conversationHistory = this.conversationHistory.slice(-16);
+					}
+
+					lastAgentResponse = data;
+					this.heatmap.apply(data.attentionMap, editor?.document.uri.fsPath);
+
+					this.post({
+						type: 'agentResponse',
+						data,
+					});
+
+					void this.sidecar.client.post('/memory/record', {
+						taskDescription: task,
+						filesEdited: data.shardsUsed.map((s) => s.file),
+						diffAccepted: false,
+						latencyMs: data.latencyMs,
+						modelUsed: data.modelUsed,
+						provider: data.provider,
+					});
+				} catch (err) {
+					this.conversationHistory.pop();
+					this.post({
+						type: 'error',
+						message: err instanceof Error ? err.message : String(err),
+					});
+				}
+				break;
+			}
+			case 'executePlanStep': {
+				if (!msg.planId || !folder) {
+					return;
+				}
+				const editor = vscode.window.activeTextEditor;
+				this.post({ type: 'streamStart' });
+				this.post({ type: 'streamIntent', intent: 'edit' });
+
+				const res = await this.sidecar.client.post<{
+					stepId: string | null;
+					status: string;
+					diff?: string;
+					shardsUsed: Array<{ file: string; reason: string; tokenCount: number }>;
+					tokensUsed?: number;
+					provider?: string;
+				}>(`/agent/plan/${msg.planId}/execute`, {
+					projectPath: folder.uri.fsPath,
 					activeFile: editor?.document.uri.fsPath,
-					cursorLine: editor?.selection.active.line,
-					projectPath: folder!.uri.fsPath,
 				});
 
 				if (!res.success || !res.data) {
-					this.post({ type: 'error', message: res.error ?? 'Agent failed' });
+					this.post({ type: 'error', message: res.error ?? 'Step execution failed' });
 					return;
 				}
 
-				lastAgentResponse = res.data;
-				this.heatmap.apply(res.data.attentionMap, editor?.document.uri.fsPath);
+				if (res.data.status === 'complete') {
+					this.post({
+						type: 'agentResponse',
+						data: {
+							response: 'All plan steps are complete.',
+							intent: 'chat',
+							shardsUsed: [],
+							tokensUsed: 0,
+							budget: 0,
+							modelUsed: '',
+							provider: res.data.provider ?? 'unknown',
+							latencyMs: 0,
+						},
+					});
+					break;
+				}
+
+				const stepResponse = res.data.diff
+					? `\`\`\`typescript\n${res.data.diff}\n\`\`\``
+					: `Step **${res.data.stepId}** completed.`;
 
 				this.post({
 					type: 'agentResponse',
-					data: res.data,
-				});
-
-				void this.sidecar.client.post('/memory/record', {
-					taskDescription: msg.task,
-					filesEdited: res.data.shardsUsed.map((s) => s.file),
-					diffAccepted: false,
-					latencyMs: res.data.latencyMs,
-					modelUsed: res.data.modelUsed,
-					provider: res.data.provider,
+					data: {
+						response: `Implemented **${res.data.stepId}**:\n\n${stepResponse}`,
+						intent: 'edit',
+						diff: res.data.diff,
+						shardsUsed: res.data.shardsUsed,
+						tokensUsed: res.data.tokensUsed ?? 0,
+						budget: 0,
+						modelUsed: '',
+						provider: res.data.provider ?? 'unknown',
+						latencyMs: 0,
+					},
 				});
 				break;
 			}
+			case 'clearChat':
+				this.conversationHistory = [];
+				this.post({ type: 'chatCleared' });
+				break;
 			case 'viewDiff': {
 				const blocks = parseCodeBlocks(msg.text ?? '');
 				const block = blocks[0];

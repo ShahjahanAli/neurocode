@@ -1,6 +1,9 @@
 import type {
 	AgentAskData,
 	AgentAskRequest,
+	AgentChatData,
+	AgentChatRequest,
+	AgentChatStreamChunk,
 	HealthData,
 	IndexStartData,
 	IndexStatusData,
@@ -136,6 +139,40 @@ export class SidecarClient {
 	/** @param request - Agent ask parameters. */
 	askAgent(request: AgentAskRequest): Promise<SidecarResponse<AgentAskData>> {
 		return this.post<AgentAskData>('/agent/ask', request);
+	}
+
+	/** @param request - Unified chat with intent routing and history. */
+	chatAgent(request: AgentChatRequest): Promise<SidecarResponse<AgentChatData>> {
+		return this.post<AgentChatData>('/agent/chat', request);
+	}
+
+	/**
+	 * Streams a chat response via SSE.
+	 * @param request - Chat request with optional conversation history.
+	 * @param onChunk - Handler for intent, token, done, and error events.
+	 * @returns Final assembled chat response from the done event.
+	 */
+	async chatStream(
+		request: AgentChatRequest,
+		onChunk: (chunk: AgentChatStreamChunk) => void,
+	): Promise<AgentChatData> {
+		let result: AgentChatData | undefined;
+
+		await this.stream('/agent/chat/stream', (raw) => {
+			const chunk = raw as AgentChatStreamChunk;
+			onChunk(chunk);
+			if (chunk.type === 'done' && chunk.data) {
+				result = chunk.data;
+			}
+			if (chunk.type === 'error') {
+				throw new Error(chunk.message ?? 'Chat stream failed');
+			}
+		}, request);
+
+		if (!result) {
+			throw new Error('Chat stream ended without a response');
+		}
+		return result;
 	}
 
 	/**

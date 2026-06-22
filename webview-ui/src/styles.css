@@ -33,7 +33,65 @@ body {
 .msg-user { align-self: flex-end; background: var(--nc-surface); padding: 8px 12px; border-radius: 8px; max-width: 90%; }
 .msg-ai { align-self: flex-start; background: var(--nc-surface); padding: 8px 12px; border-radius: 8px; max-width: 95%; border-left: 3px solid var(--nc-accent); }
 
-.messages { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+.messages { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+
+.chat-panel { height: 100vh; max-height: 100vh; }
+
+.welcome-card {
+  background: var(--nc-surface);
+  border: 1px solid var(--nc-border);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 8px;
+}
+.welcome-card h3 { margin: 0 0 8px; color: var(--nc-accent); }
+.welcome-card p { margin: 0 0 12px; color: var(--nc-muted); font-size: 0.9em; }
+.welcome-tips { margin: 0 0 12px; padding-left: 18px; font-size: 0.85em; color: var(--nc-muted); }
+.welcome-tips li { margin-bottom: 4px; }
+
+.quick-prompts { display: flex; flex-wrap: wrap; gap: 6px; }
+.quick-prompt {
+  background: var(--nc-surface);
+  color: var(--nc-text);
+  border: 1px solid var(--nc-border);
+  font-size: 0.8em;
+  padding: 4px 10px;
+}
+.quick-prompt:hover { border-color: var(--nc-accent); color: var(--nc-accent); }
+
+.msg-meta { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
+.msg-body { line-height: 1.5; }
+.msg-body p { margin: 0.4em 0; }
+.msg-body h2, .msg-body h3 { margin: 0.6em 0 0.3em; font-size: 1em; }
+
+.intent-badge { border-color: var(--nc-accent); color: var(--nc-accent); }
+.intent-chat { border-color: #4A9EFF; color: #4A9EFF; }
+.intent-plan { border-color: #FFD700; color: #FFD700; }
+.intent-edit { border-color: #4AFF9B; color: #4AFF9B; }
+
+.typing-cursor {
+  display: inline-block;
+  color: var(--nc-accent);
+  animation: blink 1s step-end infinite;
+}
+@keyframes blink { 50% { opacity: 0; } }
+
+.plan-steps {
+  margin: 8px 0 0;
+  padding-left: 20px;
+  font-size: 0.9em;
+  color: var(--nc-muted);
+}
+.plan-steps li { margin-bottom: 4px; }
+
+.shards-details { margin-top: 8px; font-size: 0.85em; color: var(--nc-muted); }
+
+.action-row { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+
+.chat-toolbar { display: flex; justify-content: flex-end; }
+.toolbar-btn { font-size: 0.75em; padding: 4px 8px; }
+
+.input-row textarea { resize: vertical; min-height: 44px; font-family: inherit; }
 
 .input-row { display: flex; gap: 8px; margin-top: auto; }
 .input-row input, .input-row textarea { flex: 1; background: var(--nc-surface); color: var(--nc-text); border: 1px solid var(--nc-border); padding: 8px; border-radius: 4px; }

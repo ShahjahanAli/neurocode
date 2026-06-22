@@ -3,6 +3,7 @@ import path from 'path';
 import { encode } from 'gpt-tokenizer';
 import { LLMRouter } from './LLMRouter.js';
 import { EmbeddingService } from './EmbeddingService.js';
+import { CHAT_SYSTEM, trimHistory } from './ChatOrchestrator.js';
 
 /**
  * Assembles context shards within a dynamic token budget.
@@ -34,36 +35,78 @@ export class ShardManager {
 	}
 
 	/**
+	 * @param {Array<{relativeFile: string, content: string, reason: string}>} shards
+	 * @returns {string}
+	 */
+	formatContextBlock(shards) {
+		return shards
+			.map((s) => `// === ${s.relativeFile} (${s.reason}) ===\n${s.content}`)
+			.join('\n\n');
+	}
+
+	/**
+	 * @param {'chat' | 'plan' | 'edit'} intent
+	 * @param {string} task
+	 * @param {Array<{relativeFile: string, content: string, reason: string}>} shards
+	 * @param {Array<{role: string, content: string}>} [history]
+	 * @returns {Array<{role: string, content: string}>}
+	 */
+	buildMessagesForIntent(intent, task, shards, history = []) {
+		const contextBlock = this.formatContextBlock(shards);
+		const contextNote = contextBlock
+			? `Relevant code context:\n${contextBlock}`
+			: 'No indexed code context yet. Suggest indexing the project first.';
+
+		if (intent === 'edit') {
+			return this.buildEditPrompt(task, shards);
+		}
+
+		const messages = [{ role: 'system', content: CHAT_SYSTEM }];
+		for (const turn of trimHistory(history)) {
+			if (turn.role === 'user' || turn.role === 'assistant') {
+				messages.push({ role: turn.role, content: turn.content });
+			}
+		}
+		messages.push({
+			role: 'user',
+			content: `${contextNote}\n\nUser message: ${task}`,
+		});
+		return messages;
+	}
+
+	/**
 	 * @param {string} task
 	 * @param {Array<{relativeFile: string, content: string, reason: string}>} shards
 	 * @returns {Array<{role: string, content: string}>}
 	 */
-	buildPrompt(task, shards) {
-		const contextBlock = shards
-			.map((s) => `// === ${s.relativeFile} (${s.reason}) ===\n${s.content}`)
-			.join('\n\n');
+	buildEditPrompt(task, shards) {
+		const contextBlock = this.formatContextBlock(shards);
 
-		const isQwen = (process.env.NEUROCODE_VLLM_MODEL || '').toLowerCase().includes('qwen');
-		const provider = LLMRouter.getActiveProvider();
+		const systemPrompt = `You are NeuroCode — an expert software engineer helping implement code changes.
 
-		const systemPrompt = (isQwen && provider === 'vllm')
-			? `You are an expert software engineer using Qwen3-Coder.
-Analyze the provided code context carefully, then complete the task.
-Output ONLY the modified code in a fenced block with the filename as a comment on line 1.
-Format strictly:
+Analyze the provided code context, then complete the task.
+Output the modified code in a fenced block with the filename as a comment on line 1.
+You may include a brief 1–2 sentence summary BEFORE the code block explaining what you changed.
+
+Format:
 \`\`\`typescript
 // filename: relative/path/to/file.ts
-[complete modified file or relevant function]
-\`\`\`
-Do not explain. Do not add commentary outside the code block.`
-			: `You are an expert software engineer. Given code context and a task,
-respond ONLY with the modified code in a code block preceded by the filename.
-Format: \`\`\`typescript\n// filename: path/to/file.ts\n[code]\n\`\`\``;
+[complete modified file or relevant section]
+\`\`\``;
 
 		return [
 			{ role: 'system', content: systemPrompt },
 			{ role: 'user', content: `Context:\n${contextBlock}\n\nTask: ${task}` },
 		];
+	}
+
+	/**
+	 * @param {string} task
+	 * @param {Array<{relativeFile: string, content: string, reason: string}>} shards
+	 * @returns {Array<{role: string, content: string}>}
+	 */
+	buildPrompt(task, shards) {
+		return this.buildEditPrompt(task, shards);
 	}
 
 	/**
