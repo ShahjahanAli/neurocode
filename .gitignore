@@ -141,3 +141,12 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# NeuroCode — local index data, build output, packaged extension
+.neurocode/
+sidecar/node_modules/
+webview-ui/node_modules/
+webview-ui/dist/
+dist/
+out/
+*.vsix

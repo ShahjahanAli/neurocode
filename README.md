@@ -10,6 +10,12 @@ NeuroCode is a VS Code extension that routes only the *relevant* parts of your c
 
 Primary backend: **vLLM on RunPod** (Qwen3-Coder). Automatic fallback: **Ollama** on your machine. Embeddings always stay local via Ollama (`nomic-embed-text`).
 
+## About
+
+NeuroCode is a **VS Code extension for agentic coding with local and cloud LLMs**. Instead of sending your whole repo to a model, it builds small **context shards** from the files that matter—active file, imports, callers, memory, and semantic matches—within a strict token budget.
+
+Run **Qwen3-Coder on RunPod** when you want maximum quality, or **Ollama locally** when you want zero cloud cost. The extension includes chat, multi-step task planning, four-agent code review, causal debugging, project memory, and optional air-gap mode for offline environments.
+
 ---
 
 ## Why NeuroCode?

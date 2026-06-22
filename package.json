@@ -1,7 +1,7 @@
 {
   "name": "neurocode",
   "displayName": "NeuroCode",
-  "description": "Agentic coding — RunPod L4 + Qwen3-Coder or local Ollama fallback",
+  "description": "VS Code extension for agentic coding with local Ollama and cloud RunPod vLLM — smart context shards, multi-agent review, and a full agent loop on modest hardware.",
   "version": "0.1.0",
   "publisher": "zms-digital",
   "license": "MIT",
