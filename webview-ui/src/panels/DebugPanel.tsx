@@ -7,7 +7,7 @@ interface CausalChain {
 	contribution: string;
 }
 
-export function DebugPanel() {
+export function DebugPanel({ embedded = false }: { embedded?: boolean }) {
 	const [result, setResult] = useState<{
 		rootCauseFile?: string;
 		rootCauseLine?: number;
@@ -24,7 +24,7 @@ export function DebugPanel() {
 	}, []);
 
 	return (
-		<div className="panel">
+		<div className={`panel${embedded ? ' panel-embedded' : ''}`}>
 			<h3 style={{ margin: 0 }}>Causal Debug</h3>
 			{!result ? (
 				<p style={{ color: 'var(--nc-muted)' }}>Use Ctrl+Shift+D to analyze a stack trace</p>

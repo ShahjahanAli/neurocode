@@ -4,7 +4,7 @@ import type { AttentionHeatmap } from '../editor/AttentionHeatmap';
 import { getWebviewHtml } from './webviewUtils';
 import { applyEdit, applyAllCodeBlocks, parseCodeBlocks, resolveFileUri, showDiff, stripNeuroCodeAppendix, type ParseCodeBlocksOptions } from '../utils/DiffApplier';
 import { buildContinuePrompt, isTruncatedResponse as isTruncatedLlmResponse, mergeContinuation } from '../utils/CodeBatchMerger';
-import type { AgentChatData, ChatIntent, ChatMode, ChatTurn } from '../sidecar/types';
+import type { AgentChatData, ChatIntent, ChatMode, ChatTurn, HealthData } from '../sidecar/types';
 import { AutoIndexer } from '../services/AutoIndexer';
 import { getConfig, getChatViewId } from '../utils/config';
 
@@ -31,10 +31,15 @@ interface StoredChatMessage {
  * NeuroCode Chat sidebar WebView provider.
  */
 export class ChatPanelProvider implements vscode.WebviewViewProvider {
+	static instance?: ChatPanelProvider;
+
 	private view?: vscode.WebviewView;
+	private viewType = 'neurocode.chatViewLeft';
 	private podPollTimer?: ReturnType<typeof setInterval>;
 	private conversationHistory: ChatTurn[] = [];
 	private uiMessages: StoredChatMessage[] = [];
+	private lastIndexing: { filesProcessed: number; totalFiles: number } | null = null;
+	private getSidecarReady: () => boolean = () => false;
 
 	/**
 	 * @param extensionUri - Extension root URI.
@@ -47,13 +52,96 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 		private readonly sidecar: SidecarManager,
 		private readonly heatmap: AttentionHeatmap,
 		private readonly context: vscode.ExtensionContext,
-	) {}
+		getSidecarReady?: () => boolean,
+	) {
+		if (getSidecarReady) {
+			this.getSidecarReady = getSidecarReady;
+		}
+		ChatPanelProvider.instance = this;
+	}
+
+	/** @returns Whether this provider hosts the tabbed right sidebar. */
+	isRightPanel(): boolean {
+		return this.viewType === 'neurocode.rightPanel';
+	}
+
+	/**
+	 * Switches the active tab in the right sidebar webview.
+	 * @param tab - Tab id to show.
+	 */
+	switchTab(tab: string): void {
+		this.post({ type: 'switchTab', tab });
+	}
+
+	/**
+	 * Updates indexing progress for the Overview tab.
+	 * @param progress - Index job progress or null when idle.
+	 */
+	setIndexingProgress(progress: { filesProcessed: number; totalFiles: number } | null): void {
+		if (!this.isRightPanel()) {
+			return;
+		}
+		this.lastIndexing = progress;
+		void this.pushHubStatus();
+	}
+
+	/**
+	 * Pushes hub status to the Overview tab on the right panel.
+	 * @param health - Optional pre-fetched health payload.
+	 */
+	async pushHubStatus(health?: HealthData): Promise<void> {
+		if (!this.isRightPanel() || !this.view) {
+			return;
+		}
+
+		let healthData = health;
+		if (!healthData && this.sidecar.isRunning()) {
+			try {
+				const projectPath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+				const res = await this.sidecar.client.health(projectPath);
+				if (res.success && res.data) {
+					healthData = res.data;
+				}
+			} catch {
+				// Hub shows unreachable state
+			}
+		}
+
+		const cfg = getConfig();
+		const workspace = vscode.workspace.workspaceFolders?.[0]?.name ?? null;
+
+		this.post({
+			type: 'hubStatus',
+			sidecarReady: this.getSidecarReady(),
+			workspace,
+			health: healthData ?? null,
+			indexing: this.lastIndexing,
+			config: {
+				chatLocation: cfg.ui.chatLocation,
+				chatMode: cfg.chat.mode,
+				autoApply: cfg.chat.autoApply,
+				autoContinue: cfg.chat.autoContinue,
+				fixOnCheck: cfg.chat.fixOnCheck,
+				autoIndex: cfg.indexing.autoIndex,
+				provider: cfg.llm.provider,
+				tokenBudget: cfg.shard.maxTokens,
+				airgap: cfg.airgap.enabled,
+				heatmap: cfg.heatmap.enabled,
+				memory: cfg.memory.enabled,
+				drift: cfg.drift.enabled,
+				genome: cfg.genome.enabled,
+				crossrepo: cfg.crossrepo.enabled,
+				runpodConfigured: Boolean(cfg.runpod.podId),
+			},
+		});
+	}
 
 	/**
 	 * @param webviewView - VS Code webview view.
 	 */
 	resolveWebviewView(webviewView: vscode.WebviewView): void {
 		this.view = webviewView;
+		this.viewType = webviewView.viewType;
 		this.loadPersistedChat();
 		webviewView.webview.options = {
 			enableScripts: true,
@@ -147,6 +235,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 		}
 
 		await vscode.commands.executeCommand(`${getChatViewId()}.focus`);
+		if (getConfig().ui.chatLocation === 'right') {
+			ChatPanelProvider.instance?.switchTab('chat');
+		}
 	}
 
 	/**
@@ -160,7 +251,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 		const styleUri = webview.asWebviewUri(
 			vscode.Uri.joinPath(this.extensionUri, 'webview-ui', 'dist', 'assets', 'index.css'),
 		);
-		return getWebviewHtml(webview, this.extensionUri, 'chat', scriptUri, styleUri);
+		return getWebviewHtml(
+			webview,
+			this.extensionUri,
+			this.viewType === 'neurocode.rightPanel' ? 'right' : 'chat',
+			scriptUri,
+			styleUri,
+		);
 	}
 
 	private startPodPolling(): void {
@@ -469,6 +566,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
 			lastAgentResponse = finalData;
 			this.heatmap.apply(finalData.attentionMap, editor?.document.uri.fsPath);
+			this.broadcastShards(finalData);
 
 			this.post({
 				type: 'agentResponse',
@@ -825,6 +923,26 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 	}
 
 	/**
+	 * Posts shard visualizer data to this webview (right panel Shards tab).
+	 * @param data - Agent response containing shard metadata.
+	 */
+	private broadcastShards(data: AgentChatData): void {
+		if (!this.isRightPanel()) {
+			return;
+		}
+		this.post({
+			type: 'shards',
+			data: {
+				shards: data.shardsUsed,
+				totalTokens: data.tokensUsed,
+				budget: data.budget,
+				provider: data.provider,
+				modelUsed: data.modelUsed,
+			},
+		});
+	}
+
+	/**
 	 * @param msg - Message from webview.
 	 */
 	private async handleMessage(msg: {
@@ -846,6 +964,99 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 		}
 
 		switch (msg.type) {
+			case 'requestStatus':
+				await this.pushHubStatus();
+				break;
+			case 'openPanel': {
+				const panel = (msg as { panel?: string }).panel;
+				if (!panel) {
+					break;
+				}
+				if (this.isRightPanel()) {
+					const tabMap: Record<string, string> = {
+						chat: 'chat',
+						tasks: 'tasks',
+						shards: 'shards',
+						review: 'review',
+						memory: 'memory',
+						debug: 'debug',
+					};
+					const tab = tabMap[panel];
+					if (tab) {
+						this.switchTab(tab);
+					}
+					break;
+				}
+				await vscode.commands.executeCommand('workbench.view.extension.neurocode-sidebar');
+				const viewIds: Record<string, string> = {
+					chat: getChatViewId(),
+					tasks: 'neurocode.tasksView',
+					shards: 'neurocode.shardsView',
+					review: 'neurocode.reviewView',
+					memory: 'neurocode.memoryView',
+					debug: 'neurocode.debugView',
+				};
+				const viewId = viewIds[panel];
+				if (viewId) {
+					await vscode.commands.executeCommand(`${viewId}.focus`);
+				}
+				break;
+			}
+			case 'runCommand': {
+				const command = (msg as { command?: string }).command;
+				if (command) {
+					await vscode.commands.executeCommand(command);
+				}
+				break;
+			}
+			case 'planTask': {
+				const task = (msg as { task?: string }).task;
+				if (!task || !folder) {
+					break;
+				}
+				const res = await this.sidecar.client.planTask(task, folder.uri.fsPath);
+				this.post({ type: 'planCreated', data: res.data });
+				break;
+			}
+			case 'executeStep': {
+				const planId = (msg as { planId?: string }).planId;
+				if (!planId || !folder) {
+					break;
+				}
+				const editor = vscode.window.activeTextEditor;
+				const res = await this.sidecar.client.post(`/agent/plan/${planId}/execute`, {
+					projectPath: folder.uri.fsPath,
+					activeFile: editor?.document.uri.fsPath,
+				});
+				this.post({ type: 'stepResult', data: res.data });
+				break;
+			}
+			case 'startReview': {
+				const editor = vscode.window.activeTextEditor;
+				if (!folder || !editor) {
+					break;
+				}
+				this.post({ type: 'reviewRunning' });
+				const res = await this.sidecar.client.post('/review/start', {
+					activeFile: editor.document.uri.fsPath,
+					cursorLine: editor.selection.active.line,
+					projectPath: folder.uri.fsPath,
+				});
+				this.post({ type: 'reviewResults', data: res.data });
+				break;
+			}
+			case 'refreshMemories':
+			case 'refresh':
+				await this.loadMemoriesForPanel();
+				break;
+			case 'delete': {
+				const memoryId = (msg as { memoryId?: string }).memoryId;
+				if (memoryId) {
+					await this.sidecar.client.delete(`/memory/${memoryId}`);
+					await this.loadMemoriesForPanel();
+				}
+				break;
+			}
 			case 'webviewReady':
 				this.postRestoreChat();
 				break;
@@ -938,19 +1149,23 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 					shards: res.data.shardsUsed,
 				});
 
+				const stepData: AgentChatData = {
+					response: stepText,
+					intent: 'edit',
+					diff: res.data.diff,
+					shardsUsed: res.data.shardsUsed,
+					tokensUsed: res.data.tokensUsed ?? 0,
+					budget: 0,
+					modelUsed: '',
+					provider: res.data.provider ?? 'unknown',
+					latencyMs: 0,
+				};
+				lastAgentResponse = stepData;
+				this.broadcastShards(stepData);
+
 				this.post({
 					type: 'agentResponse',
-					data: {
-						response: stepText,
-						intent: 'edit',
-						diff: res.data.diff,
-						shardsUsed: res.data.shardsUsed,
-						tokensUsed: res.data.tokensUsed ?? 0,
-						budget: 0,
-						modelUsed: '',
-						provider: res.data.provider ?? 'unknown',
-						latencyMs: 0,
-					},
+					data: stepData,
 				});
 				break;
 			}
@@ -1026,5 +1241,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 	 */
 	post(message: unknown): void {
 		this.view?.webview.postMessage(message);
+	}
+
+	/** Loads project memories into the Memory tab. */
+	private async loadMemoriesForPanel(): Promise<void> {
+		if (!vscode.workspace.workspaceFolders?.[0]) {
+			return;
+		}
+		const res = await this.sidecar.client.get('/memory/top?limit=20');
+		this.post({ type: 'memories', data: res.data });
 	}
 }

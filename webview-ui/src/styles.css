@@ -410,3 +410,82 @@ button.secondary { background: var(--nc-surface); color: var(--nc-text); border:
   line-height: 1.5;
 }
 .hub-footer p { margin: 0; }
+
+/* ── Right sidebar tabs ── */
+body:has(.right-sidebar) {
+	padding: 0;
+	height: 100vh;
+	overflow: hidden;
+}
+
+.right-sidebar {
+	display: flex;
+	flex-direction: column;
+	height: 100vh;
+	max-height: 100vh;
+	background: var(--nc-bg);
+}
+
+.right-tabs {
+	display: flex;
+	flex-wrap: nowrap;
+	gap: 0;
+	overflow-x: auto;
+	border-bottom: 1px solid var(--nc-border);
+	background: var(--nc-surface);
+	flex-shrink: 0;
+	scrollbar-width: thin;
+}
+
+.right-tab {
+	flex: 0 0 auto;
+	background: transparent;
+	color: var(--nc-muted);
+	border: none;
+	border-bottom: 2px solid transparent;
+	border-radius: 0;
+	padding: 8px 10px;
+	font-size: 0.78em;
+	font-weight: 500;
+	white-space: nowrap;
+}
+.right-tab:hover {
+	color: var(--nc-text);
+	background: rgba(124, 111, 247, 0.08);
+}
+.right-tab.active {
+	color: var(--nc-accent);
+	border-bottom-color: var(--nc-accent);
+	background: rgba(124, 111, 247, 0.12);
+}
+.right-tab.primary {
+	font-weight: 600;
+}
+
+.right-tab-content {
+	flex: 1;
+	min-height: 0;
+	overflow: hidden;
+	padding: 8px;
+	display: flex;
+	flex-direction: column;
+}
+
+.right-tab-content > .panel,
+.right-tab-content > .hub-panel {
+	min-height: 0;
+	flex: 1;
+	overflow-y: auto;
+}
+
+.chat-panel-embedded,
+.panel-embedded,
+.hub-panel-embedded {
+	min-height: 0 !important;
+	height: 100% !important;
+	max-height: 100% !important;
+}
+
+.chat-panel-embedded {
+	max-height: none !important;
+}

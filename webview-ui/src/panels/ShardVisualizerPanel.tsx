@@ -10,7 +10,7 @@ interface ShardData {
 	modelUsed?: string;
 }
 
-export function ShardVisualizerPanel() {
+export function ShardVisualizerPanel({ embedded = false }: { embedded?: boolean }) {
 	const vscode = useVsCodeApi();
 	const [data, setData] = useState<ShardData | null>(null);
 
@@ -28,7 +28,7 @@ export function ShardVisualizerPanel() {
 		: 'Ollama · 3.5K context';
 
 	return (
-		<div className="panel">
+		<div className={`panel${embedded ? ' panel-embedded' : ''}`}>
 			<h3 style={{ margin: 0 }}>Shard Visualizer</h3>
 			{!data ? (
 				<p style={{ color: 'var(--nc-muted)' }}>Run Ask Agent to see context here</p>

@@ -176,7 +176,13 @@ function modeLabel(mode: string): string {
 	return labels[mode] ?? mode;
 }
 
-export function HubPanel() {
+export function HubPanel({
+	embedded = false,
+	onNavigate,
+}: {
+	embedded?: boolean;
+	onNavigate?: (panel: string) => void;
+} = {}) {
 	const vscode = useVsCodeApi();
 	const [status, setStatus] = useState<HubStatus | null>(null);
 
@@ -196,6 +202,10 @@ export function HubPanel() {
 	}, [vscode]);
 
 	const openPanel = (panel: string): void => {
+		if (embedded && onNavigate) {
+			onNavigate(panel);
+			return;
+		}
 		vscode.postMessage({ type: 'openPanel', panel });
 	};
 
@@ -209,7 +219,7 @@ export function HubPanel() {
 	const sidecarOk = status?.sidecarReady && health?.status === 'ok';
 
 	return (
-		<div className="panel hub-panel">
+		<div className={`panel hub-panel${embedded ? ' hub-panel-embedded' : ''}`}>
 			<header className="hub-header">
 				<h2 className="hub-title">NeuroCode</h2>
 				<p className="hub-subtitle">Agentic coding with smart context shards</p>
@@ -267,7 +277,12 @@ export function HubPanel() {
 				<section className="hub-activity">
 					<h3 className="hub-section-title">What&apos;s on</h3>
 					<ul className="hub-activity-list">
-						<li>Chat panel: <strong>{cfg.chatLocation === 'right' ? 'Right sidebar' : 'This sidebar'}</strong></li>
+						{!embedded && (
+							<li>Chat panel: <strong>{cfg.chatLocation === 'right' ? 'Right sidebar' : 'This sidebar'}</strong></li>
+						)}
+						{embedded && (
+							<li>Switch tabs above for Chat, Tasks, Shards, and more</li>
+						)}
 						<li>Auto-index on open: <strong>{cfg.autoIndex ? 'Yes' : 'No'}</strong></li>
 						<li>Auto-apply edits: <strong>{cfg.autoApply ? 'Yes' : 'No'}</strong></li>
 						<li>Auto-continue codegen: <strong>{cfg.autoContinue ? 'Yes' : 'No'}</strong></li>
@@ -347,9 +362,11 @@ export function HubPanel() {
 				</section>
 			))}
 
+			{!embedded && (
 			<footer className="hub-footer">
 				<p>Status bar shows live model, index count, and pod state. Use sidebar sections below for each panel.</p>
 			</footer>
+			)}
 		</div>
 	);
 }

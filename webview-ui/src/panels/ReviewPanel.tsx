@@ -8,7 +8,7 @@ const AGENT_COLORS: Record<string, string> = {
 	test: 'agent-test',
 };
 
-export function ReviewPanel() {
+export function ReviewPanel({ embedded = false }: { embedded?: boolean }) {
 	const vscode = useVsCodeApi();
 	const [results, setResults] = useState<Array<{ agentType: string; severity: string; findings: Array<{ line: number; message: string; suggestion: string }> }>>([]);
 	const [running, setRunning] = useState(false);
@@ -28,7 +28,7 @@ export function ReviewPanel() {
 	};
 
 	return (
-		<div className="panel">
+		<div className={`panel${embedded ? ' panel-embedded' : ''}`}>
 			<h3 style={{ margin: 0 }}>Code Review</h3>
 			{provider && <span className="badge">Running on {provider === 'vllm' ? 'Qwen3 · RunPod L4' : 'Ollama'}</span>}
 			<button onClick={start} disabled={running}>{running ? 'Reviewing...' : 'Start Review (Ctrl+Shift+R)'}</button>

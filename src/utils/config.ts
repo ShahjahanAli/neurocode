@@ -76,7 +76,7 @@ export interface NeuroCodeConfig {
 export function getChatViewId(): string {
 	return getConfig().ui.chatLocation === 'left'
 		? 'neurocode.chatViewLeft'
-		: 'neurocode.chatView';
+		: 'neurocode.rightPanel';
 }
 
 /**

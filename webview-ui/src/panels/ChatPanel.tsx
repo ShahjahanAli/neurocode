@@ -46,7 +46,7 @@ const INTENT_LABELS: Record<ChatIntent, string> = {
 	edit: 'Implement',
 };
 
-export function ChatPanel() {
+export function ChatPanel({ embedded = false }: { embedded?: boolean }) {
 	const vscode = useVsCodeApi();
 	const [messages, setMessages] = useState<Message[]>([]);
 	const [input, setInput] = useState('');
@@ -233,7 +233,7 @@ export function ChatPanel() {
 	};
 
 	return (
-		<div className="panel chat-panel">
+		<div className={`panel chat-panel${embedded ? ' chat-panel-embedded' : ''}`}>
 			<RunPodStatusBadge
 				podState={podState as never}
 				idleRemainingMs={idleRemainingMs}

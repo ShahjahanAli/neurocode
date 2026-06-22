@@ -3,18 +3,23 @@ import type { SidecarManager } from '../sidecar/SidecarManager';
 import type { DebugPanelProvider } from '../panels/DebugPanel';
 import { AttentionHeatmap } from '../editor/AttentionHeatmap';
 
+import { ChatPanelProvider } from '../panels/ChatPanel';
+import { getConfig } from '../utils/config';
+
 /**
  * Registers causal debug command (Ctrl+Shift+D).
  * @param context - Extension context.
  * @param sidecar - Sidecar manager.
  * @param debugPanel - Debug panel provider.
- * @param heatmap - Attention heatmap for root cause highlight.
+ * @param _heatmap - Attention heatmap for root cause highlight.
+ * @param chat - Chat / right panel provider for tabbed layout.
  */
 export function registerDebugCause(
 	context: vscode.ExtensionContext,
 	sidecar: SidecarManager,
 	debugPanel: DebugPanelProvider,
 	_heatmap: AttentionHeatmap,
+	chat: ChatPanelProvider,
 ): void {
 	context.subscriptions.push(
 		vscode.commands.registerCommand('neurocode.debugCause', async () => {
@@ -54,8 +59,14 @@ export function registerDebugCause(
 				AttentionHeatmap.highlightRootCause(res.data.rootCauseFile, res.data.rootCauseLine);
 			}
 
-			debugPanel.showResult(res.data);
-			await vscode.commands.executeCommand('neurocode.debugView.focus');
+			if (getConfig().ui.chatLocation === 'right') {
+				chat.post({ type: 'debugResult', data: res.data });
+				await ChatPanelProvider.reveal();
+				chat.switchTab('debug');
+			} else {
+				debugPanel.showResult(res.data);
+				await vscode.commands.executeCommand('neurocode.debugView.focus');
+			}
 		}),
 	);
 }

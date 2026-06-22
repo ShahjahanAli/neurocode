@@ -88,7 +88,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	};
 
 	hubProvider = new HubPanelProvider(context.extensionUri, sidecarManager, () => sidecarReady);
-	chatProvider = new ChatPanelProvider(context.extensionUri, sidecarManager, heatmap, context);
+	chatProvider = new ChatPanelProvider(
+		context.extensionUri,
+		sidecarManager,
+		heatmap,
+		context,
+		() => sidecarReady,
+	);
 	shardProvider = new ShardVisualizerProvider(context.extensionUri);
 	debugProvider = new DebugPanelProvider(context.extensionUri);
 
@@ -110,7 +116,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 	context.subscriptions.push(
 		vscode.window.registerWebviewViewProvider('neurocode.hubView', hubProvider),
-		vscode.window.registerWebviewViewProvider('neurocode.chatView', chatProvider),
+		vscode.window.registerWebviewViewProvider('neurocode.rightPanel', chatProvider),
 		vscode.window.registerWebviewViewProvider('neurocode.chatViewLeft', chatProvider),
 		vscode.window.registerWebviewViewProvider('neurocode.shardsView', shardProvider),
 		vscode.window.registerWebviewViewProvider('neurocode.tasksView', new TaskQueueProvider(context.extensionUri, sidecarManager)),
@@ -124,7 +130,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	registerIndexProject(context, sidecarManager);
 	registerExplainShard(context, sidecarManager);
 	registerReviewCode(context, sidecarManager);
-	registerDebugCause(context, sidecarManager, debugProvider, heatmap);
+	registerDebugCause(context, sidecarManager, debugProvider, heatmap, chatProvider);
 	registerShowMemory(context, sidecarManager);
 	registerToggleAirGap(context, sidecarManager, restartSidecar);
 	registerStartPod(context, sidecarManager);
@@ -158,6 +164,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 function startAutoIndexing(sidecar: SidecarManager, context: vscode.ExtensionContext): void {
 	const onProgress = (progress: { filesProcessed: number; totalFiles: number } | null): void => {
 		hubProvider?.setIndexingProgress(progress);
+		chatProvider?.setIndexingProgress(progress);
 		if (!statusBarItem) {
 			return;
 		}
@@ -229,6 +236,7 @@ async function refreshHealthStatus(): Promise<void> {
 		if (res.success && res.data) {
 			updateStatusBar(res.data);
 			void hubProvider?.pushStatus(res.data);
+			void chatProvider?.pushHubStatus(res.data);
 		}
 	} catch {
 		statusBarItem.text = '$(error) NeuroCode | Sidecar unreachable';

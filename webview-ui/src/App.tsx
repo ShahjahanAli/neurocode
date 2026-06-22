@@ -1,3 +1,4 @@
+import { RightSidebarPanel } from './panels/RightSidebarPanel';
 import { HubPanel } from './panels/HubPanel';
 import { ChatPanel } from './panels/ChatPanel';
 import { ShardVisualizerPanel } from './panels/ShardVisualizerPanel';
@@ -8,6 +9,7 @@ import { DebugPanel } from './panels/DebugPanel';
 
 const VIEWS: Record<string, () => JSX.Element> = {
 	hub: HubPanel,
+	right: RightSidebarPanel,
 	chat: ChatPanel,
 	shards: ShardVisualizerPanel,
 	tasks: TaskQueuePanel,

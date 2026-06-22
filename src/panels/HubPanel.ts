@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import type { SidecarManager } from '../sidecar/SidecarManager';
 import type { HealthData } from '../sidecar/types';
 import { getChatViewId, getConfig } from '../utils/config';
+import { ChatPanelProvider } from './ChatPanel';
 import { getWebviewHtml } from './webviewUtils';
 
 /** Panel id → webview view id for focus commands. */
@@ -118,10 +119,29 @@ export class HubPanelProvider implements vscode.WebviewViewProvider {
 			const chatViewId = getChatViewId();
 			if (getConfig().ui.chatLocation === 'right') {
 				await vscode.commands.executeCommand('workbench.action.focusAuxiliaryBar');
-			} else {
-				await vscode.commands.executeCommand('workbench.view.extension.neurocode-sidebar');
+				await vscode.commands.executeCommand(`${chatViewId}.focus`);
+				ChatPanelProvider.instance?.switchTab('chat');
+				return;
 			}
+			await vscode.commands.executeCommand('workbench.view.extension.neurocode-sidebar');
 			await vscode.commands.executeCommand(`${chatViewId}.focus`);
+			return;
+		}
+
+		if (getConfig().ui.chatLocation === 'right') {
+			await vscode.commands.executeCommand('workbench.action.focusAuxiliaryBar');
+			await vscode.commands.executeCommand('neurocode.rightPanel.focus');
+			const tabMap: Record<string, string> = {
+				tasks: 'tasks',
+				shards: 'shards',
+				review: 'review',
+				memory: 'memory',
+				debug: 'debug',
+			};
+			const tab = tabMap[panel];
+			if (tab) {
+				ChatPanelProvider.instance?.switchTab(tab);
+			}
 			return;
 		}
 

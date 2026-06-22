@@ -9,7 +9,7 @@ interface Memory {
 	created_at: number;
 }
 
-export function MemoryPanel() {
+export function MemoryPanel({ embedded = false }: { embedded?: boolean }) {
 	const [memories, setMemories] = useState<Memory[]>([]);
 
 	useEffect(() => {
@@ -23,7 +23,7 @@ export function MemoryPanel() {
 	}, []);
 
 	return (
-		<div className="panel">
+		<div className={`panel${embedded ? ' panel-embedded' : ''}`}>
 			<h3 style={{ margin: 0 }}>Project Memory</h3>
 			{memories.length === 0 && <p style={{ color: 'var(--nc-muted)' }}>No memories yet</p>}
 			{memories.map((m) => (

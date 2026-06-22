@@ -3,7 +3,7 @@ import { useState } from 'react';
 
 interface Step { id: string; description: string; dependsOn: string[]; status: string }
 
-export function TaskQueuePanel() {
+export function TaskQueuePanel({ embedded = false }: { embedded?: boolean }) {
 	const vscode = useVsCodeApi();
 	const [task, setTask] = useState('');
 	const [planId, setPlanId] = useState<string | null>(null);
@@ -25,7 +25,7 @@ export function TaskQueuePanel() {
 	};
 
 	return (
-		<div className="panel">
+		<div className={`panel${embedded ? ' panel-embedded' : ''}`}>
 			<h3 style={{ margin: 0 }}>Task Queue</h3>
 			<div className="input-row">
 				<input value={task} onChange={(e) => setTask(e.target.value)} placeholder="Multi-step task..." />

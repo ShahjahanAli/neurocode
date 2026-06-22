@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import type { SidecarManager } from '../sidecar/SidecarManager';
 import { ChatPanelProvider } from '../panels/ChatPanel';
 import type { ShardVisualizerProvider } from '../panels/ShardVisualizerPanel';
+import { getConfig } from '../utils/config';
 import type { AttentionHeatmap } from '../editor/AttentionHeatmap';
 
 /**
@@ -53,13 +54,21 @@ export function registerAskAgent(
 
 			heatmap.apply(res.data.attentionMap, editor?.document.uri.fsPath);
 			chat.post({ type: 'agentResponse', data: res.data });
-			shards.post({ type: 'shards', data: {
-				shards: res.data.shardsUsed,
-				totalTokens: res.data.tokensUsed,
-				budget: res.data.budget,
-				provider: res.data.provider,
-				modelUsed: res.data.modelUsed,
-			}});
+			const shardPayload = {
+				type: 'shards' as const,
+				data: {
+					shards: res.data.shardsUsed,
+					totalTokens: res.data.tokensUsed,
+					budget: res.data.budget,
+					provider: res.data.provider,
+					modelUsed: res.data.modelUsed,
+				},
+			};
+			if (getConfig().ui.chatLocation === 'right') {
+				chat.post(shardPayload);
+			} else {
+				shards.post(shardPayload);
+			}
 		}),
 	);
 }

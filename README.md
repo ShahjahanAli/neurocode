@@ -218,11 +218,8 @@ Set `neurocode.shard.maxTokens` to `0` for automatic budgets (3500 Ollama / 6000
 
 Sidebar panels:
 
-- **Left activity bar (NeuroCode icon):**
-  - **Overview** — live status, feature catalog, quick actions (start here)
-  - **Tasks**, **Shards**, **Review**, **Memory**, **Debug**
-  - **Chat** (when `neurocode.ui.chatLocation` is `left`)
-- **Right secondary sidebar (default):** **Chat** (Cursor-style)
+- **Right secondary sidebar (default):** **NeuroCode** tabbed panel — **Overview** | **Chat** | **Tasks** | **Shards** | **Review** | **Memory** | **Debug**
+- **Left activity bar:** **Overview** (when chat is on left), **Tasks**, **Shards**, **Review**, **Memory**, **Debug**
 
 Set `neurocode.ui.chatLocation` to `left` to dock Chat with the other panels.
 
