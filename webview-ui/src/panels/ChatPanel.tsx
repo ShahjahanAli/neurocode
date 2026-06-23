@@ -289,7 +289,13 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean }) {
 	const send = (task: string, mode?: ChatMode) => {
 		if (!task.trim() || loading) return;
 		stickToBottomRef.current = true;
-		vscode.postMessage({ type: 'askAgent', task, chatMode: mode ?? chatMode });
+		vscode.postMessage({
+			type: 'askAgent',
+			task,
+			chatMode: mode ?? chatMode,
+			modelSelection,
+			selectedModel: selectedModel || undefined,
+		});
 		setInput('');
 	};
 

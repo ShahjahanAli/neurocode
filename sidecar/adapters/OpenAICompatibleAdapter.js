@@ -174,7 +174,8 @@ export class OpenAICompatibleAdapter {
 	}
 
 	/**
-	 * @returns {Promise<boolean>}
+	 * @returns {Promise<boolean>} True when the gateway responds to GET /v1/models.
+	 * Does not validate neurocode.llm.model — use chat/completions for model-specific errors.
 	 */
 	async isAvailable() {
 		if (!this.baseUrl) {
@@ -185,14 +186,7 @@ export class OpenAICompatibleAdapter {
 				headers: this.headers,
 				timeout: 10_000,
 			});
-			const models = res.data?.data ?? res.data?.models ?? [];
-			if (!Array.isArray(models) || models.length === 0) {
-				return true;
-			}
-			return models.some((m) => {
-				const id = m.id ?? m.name;
-				return id === this.model || id?.startsWith(`${this.model}:`);
-			});
+			return res.status >= 200 && res.status < 300;
 		} catch {
 			return false;
 		}

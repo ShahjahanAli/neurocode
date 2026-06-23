@@ -316,11 +316,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 	}
 
 	/** @returns Model fields for sidecar chat requests. */
-	private getModelRequestFields(): { modelSelection: 'auto' | 'manual'; selectedModel?: string } {
+	private getModelRequestFields(override?: {
+		modelSelection?: 'auto' | 'manual';
+		selectedModel?: string;
+	}): { modelSelection: 'auto' | 'manual'; selectedModel?: string } {
 		const cfg = getConfig();
 		return {
-			modelSelection: cfg.llm.modelSelection,
-			selectedModel: cfg.llm.selectedModel || undefined,
+			modelSelection: override?.modelSelection ?? cfg.llm.modelSelection,
+			selectedModel: override?.selectedModel ?? (cfg.llm.selectedModel || undefined),
 		};
 	}
 
@@ -466,6 +469,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 			isManualContinue?: boolean;
 			chatMode?: ChatMode;
 			attachments?: ChatAttachment[];
+			modelSelection?: 'auto' | 'manual';
+			selectedModel?: string;
 		},
 	): Promise<AgentChatData> {
 		const cfg = getConfig();
@@ -512,7 +517,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 					attachments: roundAttachments?.length
 						? this.buildAttachmentPayload(roundAttachments)
 						: undefined,
-					...this.getModelRequestFields(),
+					...this.getModelRequestFields({
+						modelSelection: options?.modelSelection,
+						selectedModel: options?.selectedModel,
+					}),
 				},
 				(chunk) => {
 					if (chunk.type === 'intent' && !isContinueRound) {
@@ -605,6 +613,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 			isManualContinue?: boolean;
 			chatMode?: ChatMode;
 			attachments?: ChatAttachment[];
+			modelSelection?: 'auto' | 'manual';
+			selectedModel?: string;
 		},
 	): Promise<void> {
 		const folder = vscode.workspace.workspaceFolders?.[0];
@@ -639,7 +649,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
 			let rawData: AgentChatData;
 			if (activeMode === 'agent' && !options?.isManualContinue) {
-				rawData = await this.runToolAgentLoop(task, folder, editor, options?.attachments);
+				rawData = await this.runToolAgentLoop(task, folder, editor, options?.attachments, {
+					modelSelection: options?.modelSelection,
+					selectedModel: options?.selectedModel,
+				});
 			} else {
 				rawData = await this.runImplementBatch(
 					task,
@@ -756,6 +769,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 		folder: vscode.WorkspaceFolder,
 		editor: vscode.TextEditor | undefined,
 		attachments?: ChatAttachment[],
+		modelOverride?: { modelSelection?: 'auto' | 'manual'; selectedModel?: string },
 	): Promise<AgentChatData> {
 		const cfg = getConfig();
 
@@ -771,7 +785,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 					? this.buildAttachmentPayload(attachments)
 					: undefined,
 				chatMode: 'agent',
-				...this.getModelRequestFields(),
+				...this.getModelRequestFields(modelOverride),
 			},
 			(chunk) => {
 				if (chunk.type === 'intent') {
@@ -1518,7 +1532,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 					const attachments = [...this.pendingAttachments];
 					this.pendingAttachments = [];
 					this.syncAttachmentsToWebview();
-					await this.runAgentTask(task, msg.forceIntent, { chatMode: msg.chatMode, attachments });
+					await this.runAgentTask(task, msg.forceIntent, {
+						chatMode: msg.chatMode,
+						attachments,
+						modelSelection: (msg as { modelSelection?: 'auto' | 'manual' }).modelSelection,
+						selectedModel: (msg as { selectedModel?: string }).selectedModel,
+					});
 				}
 				break;
 			}

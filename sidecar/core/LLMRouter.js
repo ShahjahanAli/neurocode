@@ -42,7 +42,8 @@ export class LLMRouter {
 			const allowFallback = process.env.NEUROCODE_LLM_FALLBACK === 'true';
 			if (!allowFallback) {
 				throw new Error(
-					'LLM gateway is unreachable. Check neurocode.llm.apiBaseUrl, neurocode.llm.apiKey, and neurocode.llm.model. ' +
+					`LLM gateway is unreachable at ${cfg.apiBaseUrl}. ` +
+					'Check neurocode.llm.apiBaseUrl and neurocode.llm.apiKey (URL must end with /v1). ' +
 					'Set neurocode.llm.fallbackToOllama to true to use local Ollama as backup.',
 				);
 			}
@@ -83,9 +84,8 @@ export class LLMRouter {
 				model: cfg.model,
 			});
 			const models = await gateway.listModels();
-			if (models.length > 0) {
-				return models;
-			}
+			// Gateway mode: never mix in Ollama models (misleading when chat still routes to gateway).
+			return models;
 		}
 
 		const ollama = new OllamaAdapter({

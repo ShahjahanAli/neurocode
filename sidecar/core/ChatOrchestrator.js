@@ -14,7 +14,6 @@ import { recordAnalyticsEvent } from './AnalyticsCollector.js';
  * @param {ChatIntent} [intent]
  */
 async function bindAdapterForRequest(params, intent) {
-	const adapter = await LLMRouter.getAdapter();
 	const models = await LLMRouter.listModels();
 	const cfg = LLMRouter._readEnvConfig();
 	const model = resolveModelId(models, {
@@ -25,6 +24,7 @@ async function bindAdapterForRequest(params, intent) {
 		intent,
 		defaultModel: cfg.model,
 	});
+	const adapter = await LLMRouter.getAdapter();
 	LLMRouter.applyModel(adapter, model);
 	const modelInfo = await adapter.getModelInfo();
 	return {
