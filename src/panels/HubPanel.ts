@@ -98,6 +98,7 @@ export class HubPanelProvider implements vscode.WebviewViewProvider {
 				chatLocation: cfg.ui.chatLocation,
 				chatMode: cfg.chat.mode,
 				autoApply: cfg.chat.autoApply,
+				autoSave: cfg.chat.autoSave,
 				autoContinue: cfg.chat.autoContinue,
 				fixOnCheck: cfg.chat.fixOnCheck,
 				autoIndex: cfg.indexing.autoIndex,

@@ -419,6 +419,11 @@
           "default": true,
           "description": "When true, Implement mode automatically writes generated files to the workspace when a batch completes (like Cursor)."
         },
+        "neurocode.chat.autoSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "When true, saves applied files to disk after NeuroCode writes or you Accept changes (clears unsaved editor dots)."
+        },
         "neurocode.chat.autoContinue": {
           "type": "boolean",
           "default": true,

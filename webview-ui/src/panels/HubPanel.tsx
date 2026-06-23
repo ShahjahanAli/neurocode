@@ -17,6 +17,7 @@ interface HubConfig {
 	chatLocation: 'right' | 'left';
 	chatMode: string;
 	autoApply: boolean;
+	autoSave: boolean;
 	autoContinue: boolean;
 	fixOnCheck: boolean;
 	autoIndex: boolean;
@@ -299,6 +300,7 @@ export function HubPanel({
 						)}
 						<li>Auto-index on open: <strong>{cfg.autoIndex ? 'Yes' : 'No'}</strong></li>
 						<li>Auto-apply edits: <strong>{cfg.autoApply ? 'Yes' : 'No'}</strong></li>
+						<li>Auto-save files: <strong>{cfg.autoSave ? 'Yes' : 'No'}</strong></li>
 						<li>Auto-continue codegen: <strong>{cfg.autoContinue ? 'Yes' : 'No'}</strong></li>
 						<li>Fix incomplete files on check: <strong>{cfg.fixOnCheck ? 'Yes' : 'No'}</strong></li>
 						<li>Attention heatmap: <strong>{cfg.heatmap ? 'On' : 'Off'}</strong></li>

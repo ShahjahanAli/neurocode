@@ -71,6 +71,7 @@ export interface NeuroCodeConfig {
 	chat: {
 		mode: ChatMode;
 		autoApply: boolean;
+		autoSave: boolean;
 		autoContinue: boolean;
 		maxContinueRounds: number;
 		fixOnCheck: boolean;
@@ -198,6 +199,7 @@ export function getConfig(): NeuroCodeConfig {
 		chat: {
 			mode: cfg.get<ChatMode>('chat.mode', 'auto'),
 			autoApply: cfg.get<boolean>('chat.autoApply', true),
+			autoSave: cfg.get<boolean>('chat.autoSave', true),
 			autoContinue: cfg.get<boolean>('chat.autoContinue', true),
 			maxContinueRounds: cfg.get<number>('chat.maxContinueRounds', 8),
 			fixOnCheck: cfg.get<boolean>('chat.fixOnCheck', true),

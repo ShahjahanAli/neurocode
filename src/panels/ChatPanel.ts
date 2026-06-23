@@ -3,7 +3,7 @@ import { randomUUID } from 'crypto';
 import type { SidecarManager } from '../sidecar/SidecarManager';
 import type { AttentionHeatmap } from '../editor/AttentionHeatmap';
 import { getWebviewHtml } from './webviewUtils';
-import { applyAllCodeBlocks, applyEdit, parseCodeBlocks, resolveFileUri, stripNeuroCodeAppendix, type ParseCodeBlocksOptions } from '../utils/DiffApplier';
+import { applyAllCodeBlocks, applyEdit, autoSaveAppliedFiles, parseCodeBlocks, resolveFileUri, stripNeuroCodeAppendix, type ParseCodeBlocksOptions } from '../utils/DiffApplier';
 import { ChangeReviewManager, type ChangeReviewSummary } from '../services/ChangeReviewManager';
 import { buildContinuePrompt, isTruncatedResponse as isTruncatedLlmResponse, mergeContinuation } from '../utils/CodeBatchMerger';
 import type { AgentChatData, ChatAttachment, ChatIntent, ChatMode, ChatTurn, HealthData } from '../sidecar/types';
@@ -130,6 +130,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 				chatLocation: cfg.ui.chatLocation,
 				chatMode: cfg.chat.mode,
 				autoApply: cfg.chat.autoApply,
+				autoSave: cfg.chat.autoSave,
 				autoContinue: cfg.chat.autoContinue,
 				fixOnCheck: cfg.chat.fixOnCheck,
 				autoIndex: cfg.indexing.autoIndex,
@@ -875,6 +876,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 				action: existed ? 'updated' : 'created',
 			});
 		}
+
+		await autoSaveAppliedFiles(applied, projectPath);
 
 		return applied;
 	}

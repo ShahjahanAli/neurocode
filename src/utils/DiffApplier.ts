@@ -466,11 +466,15 @@ export async function createOrApplyFile(
 
 	try {
 		await vscode.workspace.fs.stat(uri);
-		await applyEdit(uri, content);
-		return 'updated';
+		const applied = await applyEdit(uri, content);
+		if (applied) {
+			await saveWorkspaceUri(uri);
+		}
+		return applied ? 'updated' : 'failed';
 	} catch {
 		try {
 			await vscode.workspace.fs.writeFile(uri, encoder.encode(content));
+			await saveWorkspaceUri(uri);
 			return 'created';
 		} catch {
 			return 'failed';
@@ -523,7 +527,67 @@ export async function applyAllCodeBlocks(
 		}
 	}
 
+	if (applied.length > 0) {
+		await autoSaveAppliedFiles(applied, workspaceRoot);
+	}
+
 	return { applied, failed, unresolved };
+}
+
+/**
+ * @returns Whether neurocode.chat.autoSave is enabled.
+ */
+export function isAutoSaveEnabled(): boolean {
+	return vscode.workspace.getConfiguration('neurocode').get<boolean>('chat.autoSave', true);
+}
+
+/**
+ * Saves an open workspace document if it has unsaved changes.
+ * @param fileUri - Target file URI.
+ * @returns Whether the file was saved or already clean.
+ */
+export async function saveWorkspaceUri(fileUri: vscode.Uri): Promise<boolean> {
+	if (!isAutoSaveEnabled()) {
+		return false;
+	}
+
+	const doc = vscode.workspace.textDocuments.find(
+		(d) => d.uri.toString() === fileUri.toString(),
+	);
+	if (!doc) {
+		return true;
+	}
+	if (!doc.isDirty) {
+		return true;
+	}
+	return doc.save();
+}
+
+/**
+ * Auto-saves files NeuroCode just applied (open dirty buffers only).
+ * @param applied - Relative paths written to the workspace.
+ * @param workspaceRoot - Workspace folder path.
+ * @returns Number of files saved.
+ */
+export async function autoSaveAppliedFiles(
+	applied: Array<{ file: string }>,
+	workspaceRoot: string,
+): Promise<number> {
+	if (!isAutoSaveEnabled() || applied.length === 0) {
+		return 0;
+	}
+
+	let saved = 0;
+	for (const { file } of applied) {
+		const uri = resolveFileUri(file, workspaceRoot);
+		if (!uri) {
+			continue;
+		}
+		if (await saveWorkspaceUri(uri)) {
+			saved += 1;
+		}
+	}
+	return saved;
 }
 
 /**
