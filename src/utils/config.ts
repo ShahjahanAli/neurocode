@@ -9,6 +9,9 @@ export interface LlmConfig {
 	vllmUrl: string;
 	vllmApiKey: string;
 	vllmModel: string;
+	openaiUrl: string;
+	openaiApiKey: string;
+	openaiModel: string;
 	fallbackToOllama: boolean;
 }
 
@@ -96,6 +99,9 @@ export function getConfig(): NeuroCodeConfig {
 			vllmUrl: cfg.get<string>('llm.vllmUrl', ''),
 			vllmApiKey: cfg.get<string>('llm.vllmApiKey', ''),
 			vllmModel: cfg.get<string>('llm.vllmModel', 'Qwen/Qwen2.5-Coder-7B-Instruct'),
+			openaiUrl: cfg.get<string>('llm.openaiUrl', 'https://api.openai.com/v1'),
+			openaiApiKey: cfg.get<string>('llm.openaiApiKey', ''),
+			openaiModel: cfg.get<string>('llm.openaiModel', 'gpt-4o-mini'),
 			fallbackToOllama: cfg.get<boolean>('llm.fallbackToOllama', false),
 		},
 		shard: {

@@ -795,3 +795,90 @@ body.right-sidebar-layout {
 	font-size: 0.75em;
 	color: var(--nc-muted);
 }
+
+/* ── Drift, Genome, Task DAG ── */
+.panel-header-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	margin-bottom: 8px;
+}
+.panel-hint {
+	font-size: 0.8em;
+	color: var(--nc-muted);
+	margin: 0 0 8px;
+}
+.panel-error {
+	font-size: 0.8em;
+	color: var(--vscode-testing-iconFailed, #f44);
+	margin: 0 0 8px;
+}
+.drift-alert {
+	border: 1px solid rgba(255, 155, 74, 0.4);
+	border-left: 4px solid #FF9B4A;
+	border-radius: 6px;
+	padding: 10px;
+	margin: 8px 0;
+	background: rgba(255, 155, 74, 0.06);
+}
+.drift-alert-header { display: flex; align-items: center; gap: 8px; }
+.drift-badge { background: rgba(255, 155, 74, 0.2); color: #FF9B4A; }
+.drift-file { font-size: 0.75em; color: var(--nc-muted); margin: 4px 0; }
+.drift-compare {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 8px;
+	margin-top: 8px;
+	font-size: 0.78em;
+}
+.drift-old, .drift-new {
+	padding: 6px;
+	border-radius: 4px;
+	background: var(--nc-surface);
+	border: 1px solid var(--nc-border);
+}
+.drift-label { display: block; font-size: 0.85em; color: var(--nc-muted); margin-bottom: 4px; }
+.drift-hint { font-size: 0.78em; color: var(--nc-muted); margin: 6px 0 0; }
+.drift-ack { margin-top: 8px; font-size: 0.75em; }
+
+.genome-stats-grid {
+	display: grid;
+	grid-template-columns: repeat(2, 1fr);
+	gap: 8px;
+	margin: 12px 0;
+}
+.genome-stat {
+	padding: 10px;
+	border: 1px solid var(--nc-border);
+	border-radius: 6px;
+	background: var(--nc-surface);
+	text-align: center;
+}
+.genome-stat-value {
+	display: block;
+	font-size: 1.25em;
+	font-weight: 600;
+	color: var(--nc-text);
+}
+.genome-stat-value.on { color: #4AFF9B; }
+.genome-stat-label { font-size: 0.72em; color: var(--nc-muted); }
+
+.task-dag { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.task-node {
+	border: 1px solid var(--nc-border);
+	border-radius: 6px;
+	padding: 10px;
+	background: var(--nc-surface);
+}
+.task-node.blocked { opacity: 0.55; }
+.task-node.status-done { border-left: 3px solid #4AFF9B; }
+.task-node.status-running { border-left: 3px solid var(--nc-accent); }
+.task-node.status-failed { border-left: 3px solid var(--vscode-testing-iconFailed, #f44); }
+.task-node-head { display: flex; align-items: center; gap: 8px; }
+.task-node-icon { color: var(--nc-accent); }
+.task-node-id { font-size: 0.85em; }
+.task-node-desc { margin: 6px 0 0; font-size: 0.85em; }
+.task-node-deps { font-size: 0.72em; color: var(--nc-muted); margin-top: 4px; }
+.task-node-run { margin-top: 8px; font-size: 0.75em; }
+

@@ -1281,6 +1281,75 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 			case 'refresh':
 				await this.loadMemoriesForPanel();
 				break;
+			case 'requestDrift': {
+				try {
+					const res = await this.sidecar.client.get<{ driftedFunctions: unknown[] }>('/drift/status');
+					this.post({
+						type: 'driftData',
+						data: res.data ?? { driftedFunctions: [] },
+						enabled: getConfig().drift.enabled,
+						error: res.success ? undefined : res.error,
+					});
+				} catch (err) {
+					this.post({
+						type: 'driftData',
+						data: { driftedFunctions: [] },
+						enabled: getConfig().drift.enabled,
+						error: err instanceof Error ? err.message : String(err),
+					});
+				}
+				break;
+			}
+			case 'acknowledgeDrift': {
+				const alertId = (msg as { alertId?: number }).alertId;
+				if (alertId === undefined || alertId === null) {
+					break;
+				}
+				await this.sidecar.client.post(`/drift/acknowledge/${alertId}`, {});
+				this.post({ type: 'driftAcknowledged', alertId });
+				break;
+			}
+			case 'requestGenome': {
+				try {
+					const [statusRes, statsRes] = await Promise.all([
+						this.sidecar.client.get('/genome/status'),
+						this.sidecar.client.get('/genome/stats'),
+					]);
+					this.post({
+						type: 'genomeData',
+						status: statusRes.data,
+						stats: statsRes.data,
+						error: statusRes.success ? undefined : statusRes.error,
+					});
+				} catch (err) {
+					this.post({
+						type: 'genomeData',
+						status: null,
+						stats: null,
+						error: err instanceof Error ? err.message : String(err),
+					});
+				}
+				break;
+			}
+			case 'exportGenome': {
+				try {
+					const res = await this.sidecar.client.post<{ exportPath?: string }>('/genome/export', {});
+					this.post({
+						type: 'genomeData',
+						exportPath: res.data?.exportPath,
+						error: res.success ? undefined : res.error,
+					});
+					if (res.data?.exportPath) {
+						void vscode.window.showInformationMessage(`Genome exported to ${res.data.exportPath}`);
+					}
+				} catch (err) {
+					this.post({
+						type: 'genomeData',
+						error: err instanceof Error ? err.message : String(err),
+					});
+				}
+				break;
+			}
 			case 'delete': {
 				const memoryId = (msg as { memoryId?: string }).memoryId;
 				if (memoryId) {
@@ -1564,9 +1633,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 				await this.sidecar.client.stopPod();
 				break;
 			case 'genomeConsent': {
-				await this.sidecar.client.post('/genome/consent', { accepted: true });
-				await this.context.globalState.update('neurocode.genomeConsent', true);
-				this.post({ type: 'genomeConsent', accepted: true });
+				const accepted = (msg as { accepted?: boolean }).accepted ?? true;
+				await this.sidecar.client.post('/genome/consent', { accepted });
+				await this.context.globalState.update('neurocode.genomeConsent', accepted);
+				this.post({ type: 'genomeConsent', accepted });
 				break;
 			}
 			case 'getGenomeConsent': {

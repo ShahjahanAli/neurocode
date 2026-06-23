@@ -244,6 +244,20 @@
           "type": "string",
           "default": "Qwen/Qwen2.5-Coder-32B-Instruct-AWQ"
         },
+        "neurocode.llm.openaiUrl": {
+          "type": "string",
+          "default": "https://api.openai.com/v1",
+          "description": "OpenAI-compatible API base URL with /v1 suffix"
+        },
+        "neurocode.llm.openaiApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "OpenAI API key (or compatible provider)"
+        },
+        "neurocode.llm.openaiModel": {
+          "type": "string",
+          "default": "gpt-4o-mini"
+        },
         "neurocode.llm.fallbackToOllama": {
           "type": "boolean",
           "default": false,

@@ -63,7 +63,7 @@ export class SemanticDriftDetector {
 
 	getStatus() {
 		const rows = this.db.prepare(`
-			SELECT da.drift_score, da.detected_at, s.name, f.path
+			SELECT da.id, da.drift_score, da.detected_at, s.name, s.signature, f.path
 			FROM drift_alerts da
 			JOIN symbols s ON s.id = da.symbol_id
 			JOIN files f ON f.id = s.file_id
@@ -74,10 +74,13 @@ export class SemanticDriftDetector {
 
 		return {
 			driftedFunctions: rows.map((r) => ({
+				id: r.id,
 				file: r.path,
 				name: r.name,
 				distance: r.drift_score,
 				detectedAt: r.detected_at,
+				oldSemantic: r.signature ?? undefined,
+				newSemantic: 'Embedding distance exceeded threshold after commit',
 			})),
 		};
 	}

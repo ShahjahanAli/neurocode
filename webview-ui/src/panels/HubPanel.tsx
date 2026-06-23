@@ -122,8 +122,15 @@ const FEATURE_SECTIONS: Array<{ title: string; items: FeatureCard[] }> = [
 			{
 				id: 'drift',
 				title: 'Semantic Drift',
-				description: 'Detect when code meaning diverges from indexed embeddings over time.',
+				description: 'Detect when code meaning diverges from indexed embeddings after commits.',
+				panel: 'drift',
 				tag: 'Background',
+			},
+			{
+				id: 'genome',
+				title: 'Edit Genome',
+				description: 'Anonymized edit telemetry stats and export for training signals.',
+				panel: 'genome',
 			},
 		],
 	},

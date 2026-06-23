@@ -55,7 +55,7 @@ async function reindexFile(filePath, projectPath) {
 		return;
 	}
 
-	const { fileId, content, language } = indexFile(filePath, projectPath, services.db);
+	const { fileId, content, language } = await indexFile(filePath, projectPath, services.db);
 	const imports = extractImportPaths(content, language, filePath, projectPath);
 	storeDependencies(fileId, imports, services.db);
 	storeSymbols(fileId, extractSymbols(content, language), services.db);

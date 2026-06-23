@@ -3,6 +3,7 @@ import path from 'path';
 import { encode } from 'gpt-tokenizer';
 import { LLMRouter } from './LLMRouter.js';
 import { EmbeddingService } from './EmbeddingService.js';
+import { fileQueue } from './FileQueue.js';
 import { CHAT_SYSTEM, trimHistory } from './ChatOrchestrator.js';
 import {
 	buildReviewNotes,
@@ -174,7 +175,7 @@ Format for each file:
 			: null;
 
 		if (requestedFile && fs.existsSync(requestedFile)) {
-			const content = this._readFile(requestedFile);
+			const content = await this._readFile(requestedFile);
 			const fullTokens = this.countTokens(content);
 			const maxForReview = reviewTask
 				? Math.min(fullTokens, budget - 400, 3200)
@@ -233,7 +234,7 @@ Format for each file:
 					continue;
 				}
 				try {
-					const content = this._readFile(absPath);
+					const content = await this._readFile(absPath);
 					const tokens = Math.min(this.countTokens(content), budget - 200, 2500);
 					shards.push({
 						file: absPath,
@@ -251,7 +252,7 @@ Format for each file:
 		}
 
 		if (activeFile && fs.existsSync(activeFile) && activeFile !== requestedFile) {
-			const content = this._readFile(activeFile);
+			const content = await this._readFile(activeFile);
 			const tokens = Math.min(this.countTokens(content), budget - 500);
 			shards.push({
 				file: activeFile,
@@ -284,7 +285,7 @@ Format for each file:
 					continue;
 				}
 				try {
-					const c = this._readFile(r.path);
+					const c = await this._readFile(r.path);
 					const t = Math.min(this.countTokens(c), budget);
 					shards.push({
 						file: r.path,
@@ -314,7 +315,7 @@ Format for each file:
 						continue;
 					}
 					try {
-						const c = this._readFile(absPath);
+						const c = await this._readFile(absPath);
 						const t = Math.min(this.countTokens(c), budget);
 						shards.push({
 							file: absPath,
@@ -418,7 +419,7 @@ Format for each file:
 				break;
 			}
 			const fp = path.join(projectPath, name);
-			budget = this._tryAddShard(fp, projectPath, shards, budget, 'project overview', 0) ?? budget;
+			budget = await this._tryAddShard(fp, projectPath, shards, budget, 'project overview', 0) ?? budget;
 		}
 
 		const indexedCount = this._getIndexedFileCount(projectPath);
@@ -439,7 +440,7 @@ Format for each file:
 				if (budget <= 400) {
 					break;
 				}
-				budget = this._tryAddShard(row.path, projectPath, shards, budget, 'indexed file', 6) ?? budget;
+				budget = await this._tryAddShard(row.path, projectPath, shards, budget, 'indexed file', 6) ?? budget;
 			}
 			return;
 		}
@@ -451,7 +452,7 @@ Format for each file:
 				break;
 			}
 			const before = shards.length;
-			budget = this._tryAddShard(fp, projectPath, shards, budget, 'project scan', 6) ?? budget;
+			budget = await this._tryAddShard(fp, projectPath, shards, budget, 'project scan', 6) ?? budget;
 			if (shards.length > before) {
 				added++;
 			}
@@ -485,7 +486,7 @@ Format for each file:
 	 * @param {number} priority
 	 * @returns {number | undefined} Remaining budget
 	 */
-	_tryAddShard(filePath, projectPath, shards, budget, reason, priority) {
+	async _tryAddShard(filePath, projectPath, shards, budget, reason, priority) {
 		if (!filePath || !fs.existsSync(filePath) || budget <= 300) {
 			return budget;
 		}
@@ -493,7 +494,7 @@ Format for each file:
 			return budget;
 		}
 		try {
-			const content = this._readFile(filePath);
+			const content = await this._readFile(filePath);
 			const maxTokens = reason === 'project overview' ? 800 : 500;
 			const tokens = Math.min(this.countTokens(content), maxTokens, budget - 200);
 			if (tokens <= 0) {
@@ -553,10 +554,10 @@ Format for each file:
 
 	/**
 	 * @param {string} filePath
-	 * @returns {string}
+	 * @returns {Promise<string>}
 	 */
-	_readFile(filePath) {
-		return fs.readFileSync(filePath, 'utf8');
+	async _readFile(filePath) {
+		return fileQueue.readFile(filePath, 'utf8');
 	}
 
 	/**

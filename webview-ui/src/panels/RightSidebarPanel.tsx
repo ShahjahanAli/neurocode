@@ -6,10 +6,12 @@ import { ReviewPanel } from './ReviewPanel';
 import { MemoryPanel } from './MemoryPanel';
 import { DebugPanel } from './DebugPanel';
 import { AnalyticsPanel } from './AnalyticsPanel';
+import { DriftPanel } from './DriftPanel';
+import { GenomePanel } from './GenomePanel';
 import { useVsCodeApi } from '../hooks/useVSCodeApi';
 import { useCallback, useEffect, useState } from 'react';
 
-export type RightTab = 'overview' | 'chat' | 'tasks' | 'shards' | 'review' | 'memory' | 'debug' | 'analytics';
+export type RightTab = 'overview' | 'chat' | 'tasks' | 'shards' | 'review' | 'memory' | 'debug' | 'analytics' | 'drift' | 'genome';
 
 const TABS: Array<{ id: RightTab; label: string; primary?: boolean }> = [
 	{ id: 'overview', label: 'Overview', primary: true },
@@ -19,6 +21,8 @@ const TABS: Array<{ id: RightTab; label: string; primary?: boolean }> = [
 	{ id: 'shards', label: 'Shards', primary: true },
 	{ id: 'review', label: 'Review', primary: true },
 	{ id: 'memory', label: 'Memory' },
+	{ id: 'drift', label: 'Drift' },
+	{ id: 'genome', label: 'Genome' },
 	{ id: 'debug', label: 'Debug' },
 ];
 
@@ -30,6 +34,8 @@ const PANEL_TO_TAB: Record<string, RightTab> = {
 	memory: 'memory',
 	debug: 'debug',
 	analytics: 'analytics',
+	drift: 'drift',
+	genome: 'genome',
 };
 
 /**
@@ -54,6 +60,12 @@ export function RightSidebarPanel() {
 		}
 		if (next === 'analytics') {
 			vscode.postMessage({ type: 'requestAnalytics', hours: 24 });
+		}
+		if (next === 'drift') {
+			vscode.postMessage({ type: 'requestDrift' });
+		}
+		if (next === 'genome') {
+			vscode.postMessage({ type: 'requestGenome' });
 		}
 	}, [vscode]);
 
@@ -102,6 +114,8 @@ export function RightSidebarPanel() {
 				{tab === 'shards' && <ShardVisualizerPanel embedded />}
 				{tab === 'review' && <ReviewPanel embedded />}
 				{tab === 'memory' && <MemoryPanel embedded />}
+				{tab === 'drift' && <DriftPanel embedded />}
+				{tab === 'genome' && <GenomePanel embedded />}
 				{tab === 'debug' && <DebugPanel embedded />}
 				{tab === 'analytics' && <AnalyticsPanel embedded />}
 			</div>

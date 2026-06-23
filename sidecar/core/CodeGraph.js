@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { createHash } from 'crypto';
 import { encode } from 'gpt-tokenizer';
+import { fileQueue } from './FileQueue.js';
 
 const CODE_EXTENSIONS = new Set([
 	'.ts', '.tsx', '.js', '.jsx', '.py', '.php', '.java', '.go', '.rs',
@@ -99,10 +100,10 @@ function shouldIgnore(relPath, name, ignore) {
  * @param {string} filePath
  * @param {string} projectPath
  * @param {import('node:sqlite').DatabaseSync} db
- * @returns {{ fileId: number, content: string, language: string }}
+ * @returns {Promise<{ fileId: number, content: string, language: string }>}
  */
-export function indexFile(filePath, projectPath, db) {
-	const content = fs.readFileSync(filePath, 'utf8');
+export async function indexFile(filePath, projectPath, db) {
+	const content = await fileQueue.readFile(filePath, 'utf8');
 	const tokenCount = encode(content).length;
 	const hash = createHash('md5').update(content).digest('hex');
 	const relativePath = path.relative(projectPath, filePath).replace(/\\/g, '/');

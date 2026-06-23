@@ -1,24 +1,52 @@
 import { VLLMAdapter } from '../adapters/VLLMAdapter.js';
 import { OllamaAdapter } from '../adapters/OllamaAdapter.js';
+import { OpenAIAdapter } from '../adapters/OpenAIAdapter.js';
 
-/** @type {import('../adapters/VLLMAdapter.js').VLLMAdapter | import('../adapters/OllamaAdapter.js').OllamaAdapter | null} */
+/** @type {import('../adapters/VLLMAdapter.js').VLLMAdapter | import('../adapters/OllamaAdapter.js').OllamaAdapter | import('../adapters/OpenAIAdapter.js').OpenAIAdapter | null} */
 let _adapter = null;
 
-/** @type {'vllm' | 'ollama' | null} */
+/** @type {'vllm' | 'ollama' | 'openai' | null} */
 let _adapterType = null;
 
 /**
- * Routes LLM requests to vLLM (RunPod) with automatic Ollama fallback.
+ * Routes LLM requests to vLLM (RunPod), OpenAI, or Ollama with optional fallback.
  */
 export class LLMRouter {
 	/**
 	 * Returns the best available adapter.
 	 * @param {object | null} config - Optional env-derived config override.
-	 * @returns {Promise<import('../adapters/VLLMAdapter.js').VLLMAdapter | import('../adapters/OllamaAdapter.js').OllamaAdapter>}
+	 * @returns {Promise<import('../adapters/VLLMAdapter.js').VLLMAdapter | import('../adapters/OllamaAdapter.js').OllamaAdapter | import('../adapters/OpenAIAdapter.js').OpenAIAdapter>}
 	 */
 	static async getAdapter(config = null) {
 		const cfg = config || LLMRouter._readEnvConfig();
 		const airgap = process.env.NEUROCODE_AIRGAP === 'true';
+
+		if (!airgap && cfg.provider === 'openai' && cfg.openaiApiKey) {
+			const openai = new OpenAIAdapter({
+				baseUrl: cfg.openaiUrl || 'https://api.openai.com/v1',
+				apiKey: cfg.openaiApiKey,
+				model: cfg.openaiModel || 'gpt-4o-mini',
+			});
+
+			const available = await openai.isAvailable().catch(() => false);
+			if (available) {
+				if (_adapterType !== 'openai') {
+					console.log(`[LLMRouter] Using OpenAI: ${cfg.openaiModel}`);
+					_adapterType = 'openai';
+				}
+				_adapter = openai;
+				return openai;
+			}
+
+			const allowFallback = process.env.NEUROCODE_LLM_FALLBACK === 'true';
+			if (!allowFallback) {
+				throw new Error(
+					'OpenAI is unreachable. Check neurocode.llm.openaiUrl and neurocode.llm.openaiApiKey. ' +
+					'Set neurocode.llm.fallbackToOllama to true to use local Ollama as backup.',
+				);
+			}
+			console.warn('[LLMRouter] OpenAI unavailable — falling back to Ollama');
+		}
 
 		if (!airgap && cfg.provider === 'vllm' && cfg.vllmUrl) {
 			const vllm = new VLLMAdapter({
@@ -62,7 +90,7 @@ export class LLMRouter {
 		return ollama;
 	}
 
-	/** @returns {'vllm' | 'ollama' | null} */
+	/** @returns {'vllm' | 'ollama' | 'openai' | null} */
 	static getActiveProvider() {
 		return _adapterType;
 	}
@@ -73,7 +101,10 @@ export class LLMRouter {
 		if (manual > 0) {
 			return manual;
 		}
-		return _adapterType === 'vllm' ? 6000 : 3500;
+		if (_adapterType === 'vllm' || _adapterType === 'openai') {
+			return 6000;
+		}
+		return 3500;
 	}
 
 	/** @returns {object} Environment-derived LLM configuration. */
@@ -83,6 +114,9 @@ export class LLMRouter {
 			vllmUrl: process.env.NEUROCODE_VLLM_URL || '',
 			vllmApiKey: process.env.NEUROCODE_VLLM_KEY || '',
 			vllmModel: process.env.NEUROCODE_VLLM_MODEL || 'Qwen/Qwen2.5-Coder-32B-Instruct-AWQ',
+			openaiUrl: process.env.NEUROCODE_OPENAI_URL || 'https://api.openai.com/v1',
+			openaiApiKey: process.env.NEUROCODE_OPENAI_KEY || '',
+			openaiModel: process.env.NEUROCODE_OPENAI_MODEL || 'gpt-4o-mini',
 			ollamaUrl: process.env.NEUROCODE_OLLAMA_URL || 'http://localhost:11434',
 			ollamaModel: process.env.NEUROCODE_OLLAMA_MODEL || 'qwen2.5-coder:7b',
 		};

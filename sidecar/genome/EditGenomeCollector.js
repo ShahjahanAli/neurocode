@@ -80,11 +80,33 @@ export class EditGenomeCollector {
 
 	getStats() {
 		const status = this.getStatus();
+		const files = fs.readdirSync(this.genomeDir).filter((f) => f.endsWith('.jsonl') && f.startsWith('genome-'));
+		let accepted = 0;
+		let total = 0;
+		let latencySum = 0;
+
+		for (const f of files) {
+			for (const line of fs.readFileSync(path.join(this.genomeDir, f), 'utf8').split('\n').filter(Boolean)) {
+				try {
+					const row = JSON.parse(line);
+					total++;
+					if (row.accepted) {
+						accepted++;
+					}
+					if (typeof row.latencyMs === 'number') {
+						latencySum += row.latencyMs;
+					}
+				} catch {
+					// skip bad line
+				}
+			}
+		}
+
 		return {
 			totalEdits: status.recordCount,
-			acceptRate: 0.75,
+			acceptRate: total > 0 ? accepted / total : 0,
 			topFiles: [],
-			avgLatency: 0,
+			avgLatency: total > 0 ? latencySum / total : 0,
 		};
 	}
 }
