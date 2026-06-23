@@ -529,6 +529,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 							type: 'streamIntent',
 							intent: chunk.intent,
 							agentic: chunk.agentic,
+							investigate: chunk.investigate,
 							model: chunk.model,
 						});
 					}
@@ -973,7 +974,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 		data: AgentChatData,
 		projectPath: string,
 	): Promise<AgentChatData> {
-		if (data.intent !== 'edit' || !getConfig().chat.autoApply) {
+		if (data.intent !== 'edit' || !getConfig().chat.autoApply || data.readOnly || data.allowWrites === false) {
 			return data;
 		}
 
@@ -1041,6 +1042,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 		data: AgentChatData,
 		projectPath: string,
 	): Promise<AgentChatData> {
+		if (data.readOnly || data.allowWrites === false) {
+			return data;
+		}
 		if (data.intent !== 'chat' || !getConfig().chat.fixOnCheck || !getConfig().chat.autoApply) {
 			return data;
 		}

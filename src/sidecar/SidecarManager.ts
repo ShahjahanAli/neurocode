@@ -64,6 +64,8 @@ export class SidecarManager {
 				NEUROCODE_CROSSREPO_PATH: cfg.crossrepo.sharedIndexPath,
 				NEUROCODE_DRIFT_THRESHOLD: String(cfg.drift.threshold),
 				NEUROCODE_REVIEW_AGENTS: JSON.stringify(cfg.review.agents),
+				NEUROCODE_INTENT_ROUTER: cfg.chat.intentRouter,
+				NEUROCODE_INVESTIGATE_MAX_STEPS: String(cfg.chat.investigateMaxSteps),
 			},
 			stdio: ['ignore', 'pipe', 'pipe'],
 		});

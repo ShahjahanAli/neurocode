@@ -22,6 +22,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - **Cursor-like chat UI** on the right **secondary sidebar** (configurable via `neurocode.ui.chatLocation`)
 - **Chat mode toolbar:** Auto, Ask, Plan, Edit, Agent
 - **IntentResolver** — history-aware natural language routing (explain / plan / implement)
+- **Cursor-style intent routing** — `IntentRouter` with permissions (`readOnly`, `allowWrites`, `investigate`); debug/config questions use read-only **Investigate** loop (`read_file`, `search_code`, `reply`) instead of rewriting files
+- **Intent router settings** — `neurocode.chat.intentRouter` (`heuristic` | `hybrid` | `llm`), `neurocode.chat.investigateMaxSteps`
 - **Agent tool loop** (`POST /agent/loop/stream`) with tools: `read_file`, `search_code`, `write_file`, `reply`
 - **Auto-apply** — Implement mode writes files when batch completes (`neurocode.chat.autoApply`)
 - **Auto-continue** — Cursor-style continuation for truncated outputs (`neurocode.chat.autoContinue`)

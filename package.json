@@ -468,6 +468,19 @@
           "maximum": 12,
           "description": "Maximum files or selections you can attach to a single chat message."
         },
+        "neurocode.chat.intentRouter": {
+          "type": "string",
+          "enum": ["heuristic", "hybrid", "llm"],
+          "default": "hybrid",
+          "description": "How Auto mode routes messages: heuristic (rules), hybrid (rules + LLM for ambiguous), llm (always classify with LLM)."
+        },
+        "neurocode.chat.investigateMaxSteps": {
+          "type": "number",
+          "default": 8,
+          "minimum": 2,
+          "maximum": 15,
+          "description": "Max read-only tool steps when Auto/Ask investigates (read_file, search_code, reply)."
+        },
         "neurocode.ui.chatLocation": {
           "type": "string",
           "enum": ["right", "left"],

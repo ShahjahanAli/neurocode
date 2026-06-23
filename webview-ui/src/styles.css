@@ -363,6 +363,7 @@ body {
   border-color: var(--nc-accent);
 }
 .intent-badge.intent-agent { background: rgba(124, 111, 247, 0.25); color: #c4b5fd; }
+.intent-badge.intent-investigate { border-color: #7dd3fc; color: #7dd3fc; background: rgba(125, 211, 252, 0.12); }
 
 .input-row textarea { resize: vertical; min-height: 44px; font-family: inherit; }
 

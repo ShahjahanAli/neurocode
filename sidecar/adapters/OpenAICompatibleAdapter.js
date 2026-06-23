@@ -42,7 +42,10 @@ export class OpenAICompatibleAdapter {
 				},
 				{ headers: this.headers, timeout: 120_000 },
 			);
-			return response.data.choices[0].message.content;
+			return response.data.choices?.[0]?.message?.content ?? (() => {
+				const err = response.data?.error?.message ?? JSON.stringify(response.data ?? {}).slice(0, 300);
+				throw new Error(`LLM gateway returned no choices: ${err}`);
+			})();
 		} catch (err) {
 			if (axios.isAxiosError(err)) {
 				if (err.response?.status === 401) {

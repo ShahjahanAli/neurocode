@@ -126,6 +126,10 @@ export interface AgentChatData extends AgentAskData {
 	fileCount?: number;
 	filesApplied?: Array<{ file: string; action: 'created' | 'updated' }>;
 	truncated?: boolean;
+	readOnly?: boolean;
+	allowWrites?: boolean;
+	investigate?: boolean;
+	routingReason?: string;
 	pendingWrites?: Array<{ path: string; content: string }>;
 	toolLog?: Array<{ tool: string; args?: unknown; result?: unknown }>;
 	mode?: string;
@@ -135,6 +139,8 @@ export interface AgentChatData extends AgentAskData {
 export interface AgentChatStreamChunk {
 	type: 'intent' | 'token' | 'done' | 'error' | 'step' | 'tool_start' | 'tool_result';
 	intent?: ChatIntent;
+	investigate?: boolean;
+	readOnly?: boolean;
 	agentic?: boolean;
 	model?: string;
 	mode?: string;

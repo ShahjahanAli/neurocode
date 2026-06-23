@@ -2,7 +2,8 @@ import { randomUUID } from 'crypto';
 import { LLMRouter } from './LLMRouter.js';
 import { resolveModelId } from './ModelSelector.js';
 import { getPrimaryReviewShard } from './FileReview.js';
-import { resolveUserIntent } from './IntentResolver.js';
+import { resolveUserIntent, resolveIntentPermissions } from './IntentRouter.js';
+import { streamInvestigateLoop } from './InvestigateLoop.js';
 import { recordAnalyticsEvent } from './AnalyticsCollector.js';
 
 /** @typedef {'chat' | 'plan' | 'edit'} ChatIntent */
@@ -54,7 +55,7 @@ Rules:
 - Reference specific files from the context when relevant
 - Give honest, practical feedback on code quality, UX, and architecture
 - Do NOT dump entire file contents unless the user explicitly asks to see code
-- Do NOT rewrite or "fix" files when the user only asked to check or review — explain issues instead
+- Do NOT rewrite or "fix" files when the user only asked to check, review, or debug — explain issues and read config/env files instead
 - Do NOT ask the user to paste code — the workspace context is already attached
 - If context is truly empty, tell them to run **NeuroCode: Index Project** from the Command Palette
 - Keep explanations concise but thorough
@@ -181,19 +182,26 @@ export function extractFirstCodeBlock(response) {
  * @param {Array} shards
  * @param {Array<{role: string, content: string}>} [history]
  * @param {{ chatMode?: ChatMode, fixOnCheck?: boolean }} [options]
- * @returns {{ intent: ChatIntent, effectiveTask: string, autoFixed: boolean, agentic: boolean, reason?: string }}
+ * @param {import('../adapters/OpenAICompatibleAdapter.js').OpenAICompatibleAdapter | import('../adapters/OllamaAdapter.js').OllamaAdapter | null} [adapter]
+ * @returns {Promise<import('./IntentRouter.js').IntentResolution & { intent: ChatIntent }>}
  */
-export function resolveIntentWithContext(task, forceIntent, shards, history = [], options = {}) {
+export async function resolveIntentWithContext(task, forceIntent, shards, history = [], options = {}, adapter = null) {
 	if (forceIntent) {
+		const allowWrites = forceIntent === 'edit';
 		return {
 			intent: forceIntent,
 			effectiveTask: task,
 			autoFixed: false,
 			agentic: options.chatMode === 'agent',
+			readOnly: !allowWrites,
+			allowWrites,
+			investigate: forceIntent === 'chat',
+			confidence: 'high',
+			reason: 'forceIntent',
 		};
 	}
 
-	return resolveUserIntent(task, { history, shards, ...options });
+	return resolveIntentPermissions(task, { history, shards, ...options }, adapter);
 }
 
 /**
@@ -242,10 +250,31 @@ export async function runOrchestratedChat(services, params) {
 	);
 	const { shards, totalTokens, budget, indexed, fileCount } = assembleResult;
 
-	const resolved = resolveIntentWithContext(task, forceIntent, shards, history, {
+	const routerAdapter = chatMode === 'auto' ? await LLMRouter.getAdapter().catch(() => null) : null;
+	const resolved = await resolveIntentWithContext(task, forceIntent, shards, history, {
 		chatMode,
 		fixOnCheck,
-	});
+	}, routerAdapter);
+
+	if (resolved.investigate && !resolved.agentic && resolved.intent !== 'plan') {
+		let investigateData;
+		await streamInvestigateLoop(services, {
+			task: resolved.effectiveTask,
+			activeFile,
+			projectPath,
+			history,
+			attachments,
+			modelSelection,
+			selectedModel,
+			chatMode,
+		}, (event) => {
+			if (event.type === 'done') {
+				investigateData = event.data;
+			}
+		});
+		return investigateData ?? { response: 'Investigation failed.', intent: 'chat' };
+	}
+
 	const effectiveIntent = resolved.intent;
 	const effectiveTask = resolved.effectiveTask;
 	const agentic = resolved.agentic;
@@ -276,7 +305,7 @@ export async function runOrchestratedChat(services, params) {
 		response = await adapter.chat(messages, { temperature: temp, max_tokens: maxTokens });
 	}
 
-	if (resolved.autoFixed && effectiveIntent === 'edit') {
+	if (resolved.autoFixed && effectiveIntent === 'edit' && resolved.allowWrites) {
 		response = `**Incomplete file detected** — completing \`${getPrimaryReviewShard(shards, task)?.relativeFile ?? 'file'}\` in your project.\n\n${response}`;
 	}
 
@@ -319,7 +348,11 @@ export async function runOrchestratedChat(services, params) {
 		response,
 		intent: effectiveIntent,
 		agentic,
-		diff: effectiveIntent === 'edit' ? extractFirstCodeBlock(response) : undefined,
+		investigate: resolved.investigate,
+		readOnly: resolved.readOnly,
+		allowWrites: resolved.allowWrites,
+		routingReason: resolved.reason,
+		diff: effectiveIntent === 'edit' && resolved.allowWrites ? extractFirstCodeBlock(response) : undefined,
 		planId,
 		steps,
 		shardsUsed: shards.map((s) => ({
@@ -378,10 +411,25 @@ export async function streamOrchestratedChat(services, params, write) {
 		);
 		const { shards, totalTokens, budget, indexed, fileCount } = assembleResult;
 
-		const resolved = resolveIntentWithContext(task, forceIntent, shards, history, {
+		const routerAdapter = chatMode === 'auto' ? await LLMRouter.getAdapter().catch(() => null) : null;
+		const resolved = await resolveIntentWithContext(task, forceIntent, shards, history, {
 			chatMode,
 			fixOnCheck,
-		});
+		}, routerAdapter);
+
+		if (resolved.investigate && !resolved.agentic && resolved.intent !== 'plan') {
+			return streamInvestigateLoop(services, {
+				task: resolved.effectiveTask,
+				activeFile,
+				projectPath,
+				history,
+				attachments,
+				modelSelection,
+				selectedModel,
+				chatMode,
+			}, write);
+		}
+
 		const effectiveIntent = resolved.intent;
 		const effectiveTask = resolved.effectiveTask;
 		const agentic = resolved.agentic;
@@ -391,7 +439,15 @@ export async function streamOrchestratedChat(services, params, write) {
 			effectiveIntent,
 		);
 
-		write({ type: 'intent', intent: effectiveIntent, agentic, model });
+		write({
+			type: 'intent',
+			intent: effectiveIntent,
+			agentic,
+			investigate: resolved.investigate,
+			readOnly: resolved.readOnly,
+			model,
+			reason: resolved.reason,
+		});
 
 		const startTime = Date.now();
 
@@ -415,7 +471,7 @@ export async function streamOrchestratedChat(services, params, write) {
 			const temp = effectiveIntent === 'chat' ? 0.5 : 0.1;
 			const maxTokens = getMaxTokensForIntent(effectiveIntent);
 
-			if (resolved.autoFixed && effectiveIntent === 'edit') {
+			if (resolved.autoFixed && effectiveIntent === 'edit' && resolved.allowWrites) {
 				const banner = `**Incomplete file detected** — completing \`${getPrimaryReviewShard(shards, task)?.relativeFile ?? 'file'}\` in your project…\n\n`;
 				response = banner;
 				write({ type: 'token', content: banner });
@@ -458,6 +514,10 @@ export async function streamOrchestratedChat(services, params, write) {
 				response,
 				intent: effectiveIntent,
 				agentic,
+				investigate: resolved.investigate,
+				readOnly: resolved.readOnly,
+				allowWrites: resolved.allowWrites,
+				routingReason: resolved.reason,
 				diff: effectiveIntent === 'edit' ? extractFirstCodeBlock(response) : undefined,
 				planId,
 				steps,

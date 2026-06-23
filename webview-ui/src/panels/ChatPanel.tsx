@@ -65,6 +65,7 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean }) {
 	const [chatMode, setChatMode] = useState<ChatMode>('auto');
 	const [streamIntent, setStreamIntent] = useState<ChatIntent | null>(null);
 	const [streamAgentic, setStreamAgentic] = useState(false);
+	const [streamInvestigate, setStreamInvestigate] = useState(false);
 	const [podState, setPodState] = useState('not-configured');
 	const [llmProvider, setLlmProvider] = useState<string | null>(null);
 	const [llmModel, setLlmModel] = useState<string | null>(null);
@@ -173,12 +174,14 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean }) {
 				setLoading(true);
 				setStreamIntent(null);
 				setStreamAgentic(false);
+				setStreamInvestigate(false);
 				stickToBottomRef.current = true;
 				setMessages((m) => [...m, { role: 'assistant', text: '', streaming: true }]);
 			}
 			if (msg.type === 'streamIntent') {
 				setStreamIntent(msg.intent);
 				setStreamAgentic(Boolean(msg.agentic));
+				setStreamInvestigate(Boolean(msg.investigate));
 				if (msg.model) {
 					setActiveResolvedModel(msg.model);
 				}
@@ -307,6 +310,7 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean }) {
 
 	const badgeLabel = (m: Message): string => {
 		if (m.agentic || (m.streaming && streamAgentic)) return 'Agent';
+		if (m.streaming && streamInvestigate) return 'Investigate';
 		const intent = m.intent ?? streamIntent ?? 'chat';
 		return INTENT_LABELS[intent];
 	};
@@ -375,8 +379,8 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean }) {
 						{m.role === 'assistant' && (
 							<div className="msg-meta">
 								<span className="badge">{providerLabel(m.provider, m.modelUsed)}</span>
-								{(m.intent || streamIntent || m.agentic || streamAgentic) && (
-									<span className={`badge intent-badge intent-${m.agentic ? 'agent' : (m.intent ?? streamIntent ?? 'chat')}`}>
+								{(m.intent || streamIntent || m.agentic || streamAgentic || streamInvestigate) && (
+									<span className={`badge intent-badge intent-${m.agentic || streamAgentic ? 'agent' : (streamInvestigate ? 'investigate' : (m.intent ?? streamIntent ?? 'chat'))}`}>
 										{badgeLabel(m)}
 									</span>
 								)}
