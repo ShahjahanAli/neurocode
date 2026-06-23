@@ -30,7 +30,60 @@ Available tools:
 - Never call write_file — it is not available
 - One tool per turn; end with **reply**
 - For "why is payload X" questions: read env + LLM client code, cite exact lines
-- If prior fixes failed, say what you found and propose a different approach`;
+- If prior fixes failed, say what you found and propose a different approach
+- Output ONLY the fenced tool block during tool turns — no prose before or after the fence`;
+
+/**
+ * @param {string} tool
+ * @param {Record<string, unknown>} args
+ * @param {number} step
+ * @param {number} maxSteps
+ * @returns {string}
+ */
+function formatProgressLine(tool, args, step, maxSteps) {
+	const prefix = `_Investigating (${step}/${maxSteps})_`;
+	if (tool === 'read_file') {
+		return `${prefix} — reading \`${args.path ?? 'file'}\`…`;
+	}
+	if (tool === 'search_code') {
+		return `${prefix} — searching for \`${args.query ?? '…'}\`…`;
+	}
+	return `${prefix}…`;
+}
+
+/**
+ * @param {string} task
+ * @returns {string[]}
+ */
+function suggestPrefetchPaths(task) {
+	const paths = [];
+	const lower = task.toLowerCase();
+	if (/\b(\.env|env file|environment variable|from env)\b/i.test(lower)) {
+		paths.push('.env');
+	}
+	if (/\b(payload|llm|model|gpt-4o|default|getServerDefaults|resolveChatConfig)\b/i.test(lower)) {
+		paths.push('lib/llm.ts', 'app/api/chat/route.ts');
+	}
+	return [...new Set(paths)];
+}
+
+/**
+ * @param {string} task
+ * @param {object} toolCtx
+ * @param {(event: object) => void} write
+ * @returns {Promise<Array<{ path: string, result: Record<string, unknown> }>>}
+ */
+async function prefetchInvestigateFiles(task, toolCtx, write) {
+	const prefetched = [];
+	for (const relPath of suggestPrefetchPaths(task)) {
+		write({ type: 'status', content: `_Investigating_ — reading \`${relPath}\`…` });
+		const result = await executeAgentTool('read_file', { path: relPath, max_chars: 14_000 }, toolCtx);
+		if (result.success) {
+			prefetched.push({ path: relPath, result });
+		}
+	}
+	return prefetched;
+}
 
 /**
  * @param {Record<string, unknown>} result
@@ -50,12 +103,17 @@ function summarizeToolResult(result) {
  * @param {string} task
  * @param {Array} shards
  * @param {Array<{role: string, content: string}>} history
+ * @param {Array<{ path: string, result: Record<string, unknown> }>} [prefetched]
  * @returns {Array<{role: string, content: string}>}
  */
-function buildInvestigateMessages(task, shards, history) {
+function buildInvestigateMessages(task, shards, history, prefetched = []) {
 	const contextBlock = shards.length
 		? shards.map((s) => `// ${s.relativeFile} (${s.reason})\n${s.content}`).join('\n\n')
 		: '(no files pre-loaded — use read_file or search_code)';
+
+	const prefetchBlock = prefetched.length
+		? `\n\nPre-fetched files:\n${prefetched.map((p) => `### ${p.path}\n\`\`\`\n${p.result.content ?? ''}\n\`\`\``).join('\n\n')}`
+		: '';
 
 	const messages = [{ role: 'system', content: INVESTIGATE_SYSTEM }];
 
@@ -67,10 +125,33 @@ function buildInvestigateMessages(task, shards, history) {
 
 	messages.push({
 		role: 'user',
-		content: `Project context (preview):\n${contextBlock}\n\nUser question: ${task}\n\nInvestigate — read files first, then reply. Do not write code to disk.`,
+		content: `Project context (preview):\n${contextBlock}${prefetchBlock}\n\nUser question: ${task}\n\nInvestigate — read files first, then reply with **reply** tool. Do not write code to disk.`,
 	});
 
 	return messages;
+}
+
+/**
+ * @param {import('../adapters/OpenAICompatibleAdapter.js').OpenAICompatibleAdapter | import('../adapters/OllamaAdapter.js').OllamaAdapter} adapter
+ * @param {Array<{role: string, content: string}>} messages
+ * @param {Array} toolLog
+ * @returns {Promise<string>}
+ */
+async function synthesizeInvestigateReply(adapter, messages, toolLog) {
+	if (toolLog.length === 0) {
+		return 'Investigation finished without reading any files. Try rephrasing or attach the relevant file.';
+	}
+
+	messages.push({
+		role: 'user',
+		content: `You used ${toolLog.length} tool(s) but did not call reply. Summarize findings for the user in markdown:
+- Cite exact env values and code lines you read
+- Explain why the payload shows the wrong model
+- Suggest what to change (describe only — do not output full file rewrites)
+Do NOT output tool blocks.`,
+	});
+
+	return adapter.chat(messages, { temperature: 0.3, max_tokens: 2500 });
 }
 
 /**
@@ -131,16 +212,23 @@ export async function streamInvestigateLoop(services, params, write) {
 		const modelInfo = await adapter.getModelInfo();
 		const startTime = Date.now();
 
-		const messages = buildInvestigateMessages(task, shards, history);
-		const toolLog = [];
-		let finalReply = '';
-		let streamedText = '';
-
 		const toolCtx = {
 			projectPath,
 			db: services.db,
 			vectorStore: services.vectorStore,
 		};
+
+		const prefetched = await prefetchInvestigateFiles(task, toolCtx, write);
+		const toolLog = prefetched.map((p) => ({
+			tool: 'read_file',
+			args: { path: p.path },
+			result: summarizeToolResult(p.result),
+			prefetch: true,
+		}));
+
+		const messages = buildInvestigateMessages(task, shards, history, prefetched);
+		let finalReply = '';
+		let malformedRetries = 0;
 
 		for (let step = 0; step < maxSteps; step++) {
 			write({ type: 'step', step: step + 1, maxSteps });
@@ -151,14 +239,26 @@ export async function streamInvestigateLoop(services, params, write) {
 				max_tokens: 2500,
 			})) {
 				response += token;
-				streamedText += token;
-				write({ type: 'token', content: token });
 			}
 
 			const toolCall = parseToolCall(response);
 
 			if (!toolCall) {
+				const looksMalformed = /neurocode-tool|"tool"\s*:/i.test(response);
+				if (looksMalformed && malformedRetries < 2) {
+					malformedRetries += 1;
+					messages.push({ role: 'assistant', content: response });
+					messages.push({
+						role: 'user',
+						content: 'Malformed tool JSON. Respond with ONLY this format (no extra text):\n```neurocode-tool\n{"tool":"read_file","args":{"path":".env"}}\n```',
+					});
+					continue;
+				}
+
 				finalReply = response.trim();
+				if (finalReply) {
+					write({ type: 'stream_set', text: finalReply });
+				}
 				break;
 			}
 
@@ -173,15 +273,19 @@ export async function streamInvestigateLoop(services, params, write) {
 
 			if (!INVESTIGATE_TOOLS.includes(toolCall.tool)) {
 				finalReply = response.trim();
+				write({ type: 'stream_set', text: finalReply });
 				break;
 			}
 
 			if (toolCall.tool === 'reply') {
 				finalReply = String(toolCall.args.message ?? response).trim();
 				toolLog.push({ tool: 'reply', args: toolCall.args });
+				write({ type: 'stream_set', text: finalReply });
 				break;
 			}
 
+			const progress = formatProgressLine(toolCall.tool, toolCall.args, step + 1, maxSteps);
+			write({ type: 'status', content: progress });
 			write({ type: 'tool_start', tool: toolCall.tool, args: toolCall.args });
 
 			const result = await executeAgentTool(toolCall.tool, toolCall.args, toolCtx);
@@ -193,12 +297,14 @@ export async function streamInvestigateLoop(services, params, write) {
 			messages.push({ role: 'assistant', content: response });
 			messages.push({
 				role: 'user',
-				content: `Tool result for ${toolCall.tool}:\n\`\`\`json\n${JSON.stringify(result, null, 2)}\n\`\`\`\n\nContinue investigating or reply with your answer.`,
+				content: `Tool result for ${toolCall.tool}:\n\`\`\`json\n${JSON.stringify(result, null, 2)}\n\`\`\`\n\nContinue investigating or call reply with your answer.`,
 			});
 		}
 
 		if (!finalReply) {
-			finalReply = streamedText.trim() || 'Investigation finished without a final reply.';
+			write({ type: 'status', content: '_Summarizing findings…_' });
+			finalReply = (await synthesizeInvestigateReply(adapter, messages, toolLog)).trim();
+			write({ type: 'stream_set', text: finalReply });
 		}
 
 		const latencyMs = Date.now() - startTime;

@@ -37,17 +37,23 @@ Available tools:
  * @returns {{ tool: string, args: Record<string, unknown> } | null}
  */
 export function parseToolCall(response) {
-	const fenced = response.match(/```neurocode-tool\s*\n([\s\S]*?)```/i)
-		?? response.match(/```json\s*\n([\s\S]*?)```/i);
-
 	const candidates = [];
-	if (fenced?.[1]) {
-		candidates.push(fenced[1].trim());
+
+	const fencedClosed = response.match(/```neurocode-tool\s*\n([\s\S]*?)```/i)
+		?? response.match(/```json\s*\n([\s\S]*?)```/i);
+	if (fencedClosed?.[1]) {
+		candidates.push(fencedClosed[1].trim());
 	}
 
-	const inline = response.match(/\{[\s\S]*?"tool"\s*:\s*"(read_file|search_code|write_file|reply)"[\s\S]*?\}/);
-	if (inline?.[0]) {
-		candidates.push(inline[0]);
+	const fencedOpen = response.match(/```neurocode-tool\s*\n([\s\S]+)$/i);
+	if (fencedOpen?.[1]) {
+		candidates.push(fencedOpen[1].trim().replace(/```\s*$/i, '').trim());
+	}
+
+	const inlineRe = /\{\s*"tool"\s*:\s*"(read_file|search_code|write_file|reply)"[\s\S]*?\}/g;
+	let inlineMatch;
+	while ((inlineMatch = inlineRe.exec(response)) !== null) {
+		candidates.push(inlineMatch[0]);
 	}
 
 	for (const raw of candidates) {

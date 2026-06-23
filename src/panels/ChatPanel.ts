@@ -533,6 +533,30 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 							model: chunk.model,
 						});
 					}
+					if (chunk.type === 'status' && chunk.content) {
+						this.post({ type: 'streamSetText', text: chunk.content });
+					}
+					if (chunk.type === 'stream_set' && chunk.text) {
+						this.post({ type: 'streamSetText', text: chunk.text });
+					}
+					if (chunk.type === 'step' && chunk.step) {
+						this.post({
+							type: 'batchProgress',
+							round: chunk.step,
+							message: `Investigating (${chunk.step}/${chunk.maxSteps ?? '?'})…`,
+						});
+					}
+					if (chunk.type === 'tool_start' && chunk.tool) {
+						const pathArg = chunk.args && typeof chunk.args === 'object' && 'path' in chunk.args
+							? String((chunk.args as { path?: string }).path ?? '')
+							: '';
+						const label = chunk.tool === 'read_file' && pathArg
+							? `Reading \`${pathArg}\`…`
+							: chunk.tool === 'search_code'
+								? 'Searching codebase…'
+								: `Tool: ${chunk.tool}…`;
+						this.post({ type: 'batchProgress', round: 1, message: label });
+					}
 					if (chunk.type === 'token' && chunk.content) {
 						roundText += chunk.content;
 						if (!isContinueRound) {

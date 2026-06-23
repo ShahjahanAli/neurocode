@@ -137,7 +137,7 @@ export interface AgentChatData extends AgentAskData {
 
 /** SSE chunk from POST /agent/chat/stream or /agent/loop/stream. */
 export interface AgentChatStreamChunk {
-	type: 'intent' | 'token' | 'done' | 'error' | 'step' | 'tool_start' | 'tool_result';
+	type: 'intent' | 'token' | 'done' | 'error' | 'step' | 'tool_start' | 'tool_result' | 'status' | 'stream_set';
 	intent?: ChatIntent;
 	investigate?: boolean;
 	readOnly?: boolean;
@@ -150,6 +150,7 @@ export interface AgentChatStreamChunk {
 	args?: unknown;
 	result?: unknown;
 	content?: string;
+	text?: string;
 	data?: AgentChatData;
 	message?: string;
 }

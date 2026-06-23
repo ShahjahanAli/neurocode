@@ -212,6 +212,7 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean }) {
 				setLoading(false);
 				setStreamIntent(null);
 				setStreamAgentic(false);
+				setStreamInvestigate(false);
 				setBatchProgress(null);
 				setMessages((m) => {
 					const withoutStream = m.filter((x) => !x.streaming);
