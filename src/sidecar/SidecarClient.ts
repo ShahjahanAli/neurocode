@@ -208,11 +208,11 @@ export class SidecarClient {
 		if (!result) {
 			if (streamedText.trim()) {
 				throw new Error(
-					'Chat stream ended before completion. Partial response was received — try again or check RunPod/vLLM connectivity.',
+					'Chat stream ended before completion. Partial response was received — try again or check LLM gateway connectivity.',
 				);
 			}
 			throw new Error(
-				'Chat stream ended without a response. Check NeuroCode sidecar logs, RunPod vLLM URL, and API key in settings.',
+				'Chat stream ended without a response. Check NeuroCode sidecar logs and neurocode.llm.apiBaseUrl / apiKey.',
 			);
 		}
 		return result;
@@ -249,7 +249,7 @@ export class SidecarClient {
 
 		if (!result) {
 			throw new Error(
-				'Agent loop ended without a response. Check sidecar logs and RunPod vLLM connectivity.',
+				'Agent loop ended without a response. Check sidecar logs and LLM gateway connectivity.',
 			);
 		}
 		return result;

@@ -9,6 +9,7 @@ import crossrepoRoutes from './crossrepo.js';
 import runpodRoutes from './runpod.js';
 import driftRoutes from './drift.js';
 import analyticsRoutes from './analytics.js';
+import llmRoutes from './llm.js';
 
 /**
  * Mounts all NeuroCode sidecar API routes on an Express app.
@@ -26,4 +27,5 @@ export function mountRoutes(app) {
 	app.use('/runpod', runpodRoutes);
 	app.use('/drift', driftRoutes);
 	app.use('/analytics', analyticsRoutes);
+	app.use('/llm', llmRoutes);
 }

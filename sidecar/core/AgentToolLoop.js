@@ -1,4 +1,5 @@
 import { LLMRouter } from './LLMRouter.js';
+import { resolveModelId } from './ModelSelector.js';
 import { trimHistory } from './ChatOrchestrator.js';
 import { recordAnalyticsEvent } from './AnalyticsCollector.js';
 import { executeAgentTool, AGENT_TOOL_NAMES } from './AgentTools.js';
@@ -126,6 +127,9 @@ export async function streamAgentToolLoop(services, params, write) {
 		history = [],
 		maxSteps = 10,
 		attachments = [],
+		modelSelection = 'auto',
+		selectedModel,
+		chatMode = 'agent',
 	} = params;
 
 	try {
@@ -136,8 +140,6 @@ export async function streamAgentToolLoop(services, params, write) {
 				console.warn('[AgentToolLoop] RunPod not ready:', err.message);
 			}
 		}
-
-		write({ type: 'intent', intent: 'edit', agentic: true, mode: 'tool-loop' });
 
 		const assembleResult = await services.shardManager.assembleContext(
 			task,
@@ -150,6 +152,19 @@ export async function streamAgentToolLoop(services, params, write) {
 		const { shards, totalTokens, budget, indexed, fileCount } = assembleResult;
 
 		const adapter = await LLMRouter.getAdapter();
+		const models = await LLMRouter.listModels();
+		const cfg = LLMRouter._readEnvConfig();
+		const resolvedModel = resolveModelId(models, {
+			modelSelection,
+			selectedModel,
+			task,
+			chatMode,
+			intent: 'edit',
+			defaultModel: cfg.model,
+		});
+		LLMRouter.applyModel(adapter, resolvedModel);
+		write({ type: 'intent', intent: 'edit', agentic: true, mode: 'tool-loop', model: resolvedModel });
+
 		const provider = LLMRouter.getActiveProvider();
 		const modelInfo = await adapter.getModelInfo();
 		const startTime = Date.now();
@@ -224,7 +239,7 @@ export async function streamAgentToolLoop(services, params, write) {
 			services.runpodManager.resetIdleTimer();
 		}
 
-		if (provider === 'vllm' && services.runpodManager?.currentSessionId) {
+		if (provider === 'gateway' && services.runpodManager?.currentSessionId) {
 			services.db.prepare(
 				'UPDATE runpod_sessions SET llm_calls = llm_calls + 1 WHERE id = ?',
 			).run(services.runpodManager.currentSessionId);

@@ -1,11 +1,39 @@
 import { randomUUID } from 'crypto';
 import { LLMRouter } from './LLMRouter.js';
+import { resolveModelId } from './ModelSelector.js';
 import { getPrimaryReviewShard } from './FileReview.js';
 import { resolveUserIntent } from './IntentResolver.js';
 import { recordAnalyticsEvent } from './AnalyticsCollector.js';
 
 /** @typedef {'chat' | 'plan' | 'edit'} ChatIntent */
 /** @typedef {'auto' | 'explain' | 'plan' | 'implement' | 'agent'} ChatMode */
+
+/**
+ * Resolves and applies the model for a chat request.
+ * @param {object} params
+ * @param {ChatIntent} [intent]
+ */
+async function bindAdapterForRequest(params, intent) {
+	const adapter = await LLMRouter.getAdapter();
+	const models = await LLMRouter.listModels();
+	const cfg = LLMRouter._readEnvConfig();
+	const model = resolveModelId(models, {
+		modelSelection: params.modelSelection ?? 'auto',
+		selectedModel: params.selectedModel,
+		task: params.task,
+		chatMode: params.chatMode ?? 'auto',
+		intent,
+		defaultModel: cfg.model,
+	});
+	LLMRouter.applyModel(adapter, model);
+	const modelInfo = await adapter.getModelInfo();
+	return {
+		adapter,
+		model,
+		provider: LLMRouter.getActiveProvider(),
+		modelInfo,
+	};
+}
 
 const PLANNER_PROMPT = `You are a software task planner. Break the user's task into at most 8 ordered, actionable steps.
 Return ONLY valid JSON (no markdown):
@@ -191,6 +219,8 @@ export async function runOrchestratedChat(services, params) {
 		chatMode = 'auto',
 		fixOnCheck = true,
 		attachments = [],
+		modelSelection = 'auto',
+		selectedModel,
 	} = params;
 	const startTime = Date.now();
 
@@ -201,10 +231,6 @@ export async function runOrchestratedChat(services, params) {
 			console.warn('[ChatOrchestrator] RunPod not ready:', err.message);
 		}
 	}
-
-	const adapter = await LLMRouter.getAdapter();
-	const provider = LLMRouter.getActiveProvider();
-	const modelInfo = await adapter.getModelInfo();
 
 	const assembleResult = await services.shardManager.assembleContext(
 		task,
@@ -223,6 +249,11 @@ export async function runOrchestratedChat(services, params) {
 	const effectiveIntent = resolved.intent;
 	const effectiveTask = resolved.effectiveTask;
 	const agentic = resolved.agentic;
+
+	const { adapter, model, provider, modelInfo } = await bindAdapterForRequest(
+		{ task, chatMode, modelSelection, selectedModel },
+		effectiveIntent,
+	);
 
 	let response = '';
 	let planId;
@@ -253,7 +284,7 @@ export async function runOrchestratedChat(services, params) {
 		services.runpodManager.resetIdleTimer();
 	}
 
-	if (provider === 'vllm' && services.runpodManager?.currentSessionId) {
+	if (provider === 'gateway' && services.runpodManager?.currentSessionId) {
 		services.db.prepare(
 			'UPDATE runpod_sessions SET llm_calls = llm_calls + 1 WHERE id = ?',
 		).run(services.runpodManager.currentSessionId);
@@ -300,6 +331,7 @@ export async function runOrchestratedChat(services, params) {
 		tokensUsed: totalTokens,
 		budget,
 		modelUsed: modelInfo.name,
+		resolvedModel: model,
 		provider,
 		latencyMs,
 		indexed,
@@ -323,6 +355,8 @@ export async function streamOrchestratedChat(services, params, write) {
 		chatMode = 'auto',
 		fixOnCheck = true,
 		attachments = [],
+		modelSelection = 'auto',
+		selectedModel,
 	} = params;
 
 	try {
@@ -352,11 +386,13 @@ export async function streamOrchestratedChat(services, params, write) {
 		const effectiveTask = resolved.effectiveTask;
 		const agentic = resolved.agentic;
 
-		write({ type: 'intent', intent: effectiveIntent, agentic });
+		const { adapter, model, provider, modelInfo } = await bindAdapterForRequest(
+			{ task, chatMode, modelSelection, selectedModel },
+			effectiveIntent,
+		);
 
-		const adapter = await LLMRouter.getAdapter();
-		const provider = LLMRouter.getActiveProvider();
-		const modelInfo = await adapter.getModelInfo();
+		write({ type: 'intent', intent: effectiveIntent, agentic, model });
+
 		const startTime = Date.now();
 
 		let response = '';
@@ -395,7 +431,7 @@ export async function streamOrchestratedChat(services, params, write) {
 			services.runpodManager.resetIdleTimer();
 		}
 
-		if (provider === 'vllm' && services.runpodManager?.currentSessionId) {
+		if (provider === 'gateway' && services.runpodManager?.currentSessionId) {
 			services.db.prepare(
 				'UPDATE runpod_sessions SET llm_calls = llm_calls + 1 WHERE id = ?',
 			).run(services.runpodManager.currentSessionId);
@@ -434,6 +470,7 @@ export async function streamOrchestratedChat(services, params, write) {
 				tokensUsed: totalTokens,
 				budget,
 				modelUsed: modelInfo.name,
+				resolvedModel: model,
 				provider,
 				latencyMs,
 				indexed,

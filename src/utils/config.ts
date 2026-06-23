@@ -1,17 +1,23 @@
 import * as vscode from 'vscode';
 import type { ChatMode } from '../sidecar/types';
 
-/** LLM provider configuration. */
+/** LLM backend mode. */
+export type LlmMode = 'gateway' | 'ollama';
+
+/** LLM configuration — gateway is any OpenAI-compatible API endpoint. */
 export interface LlmConfig {
-	provider: 'ollama' | 'vllm' | 'openai';
+	mode: LlmMode;
+	/** OpenAI-compatible base URL (e.g. LiteLLM, vLLM, RunPod proxy, OpenAI). */
+	apiBaseUrl: string;
+	apiKey: string;
+	model: string;
+	/** Optional display label for the gateway in logs/UI. */
+	gatewayLabel: string;
+	modelSelection: 'auto' | 'manual';
+	selectedModel: string;
+	/** Local Ollama — used for ollama mode, embeddings, and optional fallback. */
 	ollamaUrl: string;
 	ollamaModel: string;
-	vllmUrl: string;
-	vllmApiKey: string;
-	vllmModel: string;
-	openaiUrl: string;
-	openaiApiKey: string;
-	openaiModel: string;
 	fallbackToOllama: boolean;
 }
 
@@ -32,7 +38,7 @@ export interface SidecarConfig {
 	port: number;
 }
 
-/** RunPod pod lifecycle configuration. */
+/** Optional RunPod pod lifecycle (independent of LLM gateway URL). */
 export interface RunpodConfig {
 	apiKey: string;
 	podId: string;
@@ -76,6 +82,49 @@ export interface NeuroCodeConfig {
 }
 
 /**
+ * Resolves LLM settings with backward compatibility for legacy vllm/openai keys.
+ * @param cfg - VS Code configuration namespace.
+ * @returns Normalized LLM config.
+ */
+function resolveLlmConfig(cfg: vscode.WorkspaceConfiguration): LlmConfig {
+	const legacyProvider = cfg.get<string>('llm.provider', '');
+	const mode: LlmMode = cfg.get<LlmMode>('llm.mode')
+		?? (legacyProvider === 'ollama' ? 'ollama' : 'gateway');
+
+	const apiBaseUrl = (
+		cfg.get<string>('llm.apiBaseUrl', '')
+		|| cfg.get<string>('llm.vllmUrl', '')
+		|| cfg.get<string>('llm.openaiUrl', '')
+	).trim();
+
+	const apiKey = (
+		cfg.get<string>('llm.apiKey', '')
+		|| cfg.get<string>('llm.vllmApiKey', '')
+		|| cfg.get<string>('llm.openaiApiKey', '')
+	).trim();
+
+	const model = (
+		cfg.get<string>('llm.model', '')
+		|| cfg.get<string>('llm.vllmModel', '')
+		|| cfg.get<string>('llm.openaiModel', '')
+		|| 'qwen2.5-coder:7b'
+	).trim();
+
+	return {
+		mode,
+		apiBaseUrl,
+		apiKey,
+		model,
+		gatewayLabel: cfg.get<string>('llm.gatewayLabel', 'LLM gateway'),
+		modelSelection: cfg.get<'auto' | 'manual'>('llm.modelSelection', 'auto'),
+		selectedModel: cfg.get<string>('llm.selectedModel', '').trim(),
+		ollamaUrl: cfg.get<string>('llm.ollamaUrl', 'http://localhost:11434'),
+		ollamaModel: cfg.get<string>('llm.ollamaModel', 'qwen2.5-coder:7b'),
+		fallbackToOllama: cfg.get<boolean>('llm.fallbackToOllama', false),
+	};
+}
+
+/**
  * @returns Webview view id for the chat panel based on UI settings.
  */
 export function getChatViewId(): string {
@@ -92,18 +141,7 @@ export function getConfig(): NeuroCodeConfig {
 	const cfg = vscode.workspace.getConfiguration('neurocode');
 
 	return {
-		llm: {
-			provider: cfg.get<'ollama' | 'vllm' | 'openai'>('llm.provider', 'ollama'),
-			ollamaUrl: cfg.get<string>('llm.ollamaUrl', 'http://localhost:11434'),
-			ollamaModel: cfg.get<string>('llm.ollamaModel', 'qwen2.5-coder:7b'),
-			vllmUrl: cfg.get<string>('llm.vllmUrl', ''),
-			vllmApiKey: cfg.get<string>('llm.vllmApiKey', ''),
-			vllmModel: cfg.get<string>('llm.vllmModel', 'Qwen/Qwen2.5-Coder-7B-Instruct'),
-			openaiUrl: cfg.get<string>('llm.openaiUrl', 'https://api.openai.com/v1'),
-			openaiApiKey: cfg.get<string>('llm.openaiApiKey', ''),
-			openaiModel: cfg.get<string>('llm.openaiModel', 'gpt-4o-mini'),
-			fallbackToOllama: cfg.get<boolean>('llm.fallbackToOllama', false),
-		},
+		llm: resolveLlmConfig(cfg),
 		shard: {
 			maxTokens: cfg.get<number>('shard.maxTokens', 0),
 			maxFiles: cfg.get<number>('shard.maxFiles', 8),

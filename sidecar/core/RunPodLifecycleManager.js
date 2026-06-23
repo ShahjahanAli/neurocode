@@ -16,8 +16,8 @@ export class RunPodLifecycleManager {
 	 * @param {object} opts
 	 * @param {string} opts.podId
 	 * @param {string} opts.apiKey
-	 * @param {string} opts.vllmUrl
-	 * @param {string} opts.vllmApiKey
+	 * @param {string} opts.apiBaseUrl - OpenAI-compatible gateway URL on the pod.
+	 * @param {string} opts.gatewayApiKey - Bearer token for the gateway endpoint.
 	 * @param {number} [opts.idleTimeoutMs]
 	 * @param {boolean} [opts.autoStop]
 	 * @param {import('node:sqlite').DatabaseSync} opts.db
@@ -25,6 +25,8 @@ export class RunPodLifecycleManager {
 	constructor({
 		podId,
 		apiKey,
+		apiBaseUrl,
+		gatewayApiKey,
 		vllmUrl,
 		vllmApiKey,
 		idleTimeoutMs = 1_800_000,
@@ -33,8 +35,9 @@ export class RunPodLifecycleManager {
 	}) {
 		this.podId = podId;
 		this.apiKey = apiKey;
-		this.vllmUrl = vllmUrl.replace(/\/$/, '');
-		this.vllmApiKey = vllmApiKey;
+		const base = (apiBaseUrl || vllmUrl || '').replace(/\/$/, '');
+		this.apiBaseUrl = base;
+		this.gatewayApiKey = gatewayApiKey || vllmApiKey || '';
 		this.idleTimeoutMs = idleTimeoutMs;
 		this.autoStop = autoStop;
 		this.db = db;
@@ -107,8 +110,8 @@ export class RunPodLifecycleManager {
 		while (Date.now() < deadline) {
 			await new Promise((r) => setTimeout(r, 5000));
 			try {
-				const res = await fetch(`${this.vllmUrl}/models`, {
-					headers: { Authorization: `Bearer ${this.vllmApiKey}` },
+				const res = await fetch(`${this.apiBaseUrl}/models`, {
+					headers: { Authorization: `Bearer ${this.gatewayApiKey}` },
 					signal: AbortSignal.timeout(5000),
 				});
 				if (res.ok) {
@@ -128,11 +131,11 @@ export class RunPodLifecycleManager {
 	async warmup() {
 		const t = Date.now();
 		try {
-			const res = await fetch(`${this.vllmUrl}/chat/completions`, {
+			const res = await fetch(`${this.apiBaseUrl}/chat/completions`, {
 				method: 'POST',
 				headers: {
 					'Content-Type': 'application/json',
-					Authorization: `Bearer ${this.vllmApiKey}`,
+					Authorization: `Bearer ${this.gatewayApiKey}`,
 				},
 				body: JSON.stringify({
 					model: process.env.NEUROCODE_VLLM_MODEL,

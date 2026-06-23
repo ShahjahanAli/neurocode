@@ -133,7 +133,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 				autoContinue: cfg.chat.autoContinue,
 				fixOnCheck: cfg.chat.fixOnCheck,
 				autoIndex: cfg.indexing.autoIndex,
-				provider: cfg.llm.provider,
+				provider: cfg.llm.mode,
 				tokenBudget: cfg.shard.maxTokens,
 				airgap: cfg.airgap.enabled,
 				heatmap: cfg.heatmap.enabled,
@@ -305,6 +305,25 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 		}));
 	}
 
+	/** Pushes model selection prefs to the webview. */
+	private syncModelPreferenceToWebview(): void {
+		const cfg = getConfig();
+		this.post({
+			type: 'syncModelPreference',
+			modelSelection: cfg.llm.modelSelection,
+			selectedModel: cfg.llm.selectedModel,
+		});
+	}
+
+	/** @returns Model fields for sidecar chat requests. */
+	private getModelRequestFields(): { modelSelection: 'auto' | 'manual'; selectedModel?: string } {
+		const cfg = getConfig();
+		return {
+			modelSelection: cfg.llm.modelSelection,
+			selectedModel: cfg.llm.selectedModel || undefined,
+		};
+	}
+
 	/** Opens or focuses the chat view (right secondary sidebar by default, Cursor-style). */
 	static async reveal(): Promise<void> {
 		if (getConfig().ui.chatLocation === 'right') {
@@ -356,12 +375,18 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 	}
 
 	private async postPodStatus(): Promise<void> {
-		const res = await this.sidecar.client.runpodStatus();
-		const cost = await this.sidecar.client.get<{ sessionMinutes?: number; estimatedCostUsd?: number; llmCalls?: number }>('/runpod/cost');
+		const projectPath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+		const [res, health, cost] = await Promise.all([
+			this.sidecar.client.runpodStatus(),
+			projectPath ? this.sidecar.client.health(projectPath).catch(() => null) : Promise.resolve(null),
+			this.sidecar.client.get<{ sessionMinutes?: number; estimatedCostUsd?: number; llmCalls?: number }>('/runpod/cost'),
+		]);
 		this.post({
 			type: 'podStatus',
 			data: {
 				...(res.data ?? { podState: 'not-configured' }),
+				provider: health?.data?.provider ?? res.data?.provider,
+				model: health?.data?.model?.name ?? res.data?.model,
 				cost: cost.data,
 			},
 		});
@@ -487,6 +512,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 					attachments: roundAttachments?.length
 						? this.buildAttachmentPayload(roundAttachments)
 						: undefined,
+					...this.getModelRequestFields(),
 				},
 				(chunk) => {
 					if (chunk.type === 'intent' && !isContinueRound) {
@@ -494,6 +520,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 							type: 'streamIntent',
 							intent: chunk.intent,
 							agentic: chunk.agentic,
+							model: chunk.model,
 						});
 					}
 					if (chunk.type === 'token' && chunk.content) {
@@ -743,6 +770,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 				attachments: attachments?.length
 					? this.buildAttachmentPayload(attachments)
 					: undefined,
+				chatMode: 'agent',
+				...this.getModelRequestFields(),
 			},
 			(chunk) => {
 				if (chunk.type === 'intent') {
@@ -750,6 +779,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 						type: 'streamIntent',
 						intent: chunk.intent,
 						agentic: true,
+						model: chunk.model,
 					});
 				}
 				if (chunk.type === 'step') {
@@ -1358,9 +1388,41 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 				}
 				break;
 			}
+			case 'requestModels': {
+				try {
+					const res = await this.sidecar.client.get<{
+						models?: Array<{ id: string; owned_by?: string }>;
+					}>('/llm/models');
+					this.post({
+						type: 'modelsList',
+						models: res.data?.models ?? [],
+						error: res.success ? undefined : res.error,
+					});
+				} catch (err) {
+					this.post({
+						type: 'modelsList',
+						models: [],
+						error: err instanceof Error ? err.message : String(err),
+					});
+				}
+				break;
+			}
+			case 'setModelSelection': {
+				const body = msg as { modelSelection?: 'auto' | 'manual'; selectedModel?: string };
+				const cfg = vscode.workspace.getConfiguration('neurocode');
+				if (body.modelSelection) {
+					await cfg.update('llm.modelSelection', body.modelSelection, vscode.ConfigurationTarget.Workspace);
+				}
+				if (body.selectedModel) {
+					await cfg.update('llm.selectedModel', body.selectedModel, vscode.ConfigurationTarget.Workspace);
+				}
+				this.syncModelPreferenceToWebview();
+				break;
+			}
 			case 'webviewReady':
 				this.postRestoreChat();
 				this.syncAttachmentsToWebview();
+				this.syncModelPreferenceToWebview();
 				break;
 			case 'attachActiveFile': {
 				const editor = vscode.window.activeTextEditor;

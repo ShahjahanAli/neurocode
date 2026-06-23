@@ -139,8 +139,8 @@ const FEATURE_SECTIONS: Array<{ title: string; items: FeatureCard[] }> = [
 		items: [
 			{
 				id: 'runpod',
-				title: 'RunPod GPU',
-				description: 'Start/stop remote vLLM pod. Auto-stop on idle saves cost.',
+				title: 'GPU Pod (optional)',
+				description: 'Optional RunPod lifecycle: start/stop a GPU pod. Your LLM URL is set separately in neurocode.llm.apiBaseUrl.',
 				command: 'neurocode.startPod',
 			},
 			{
@@ -167,13 +167,14 @@ const FEATURE_SECTIONS: Array<{ title: string; items: FeatureCard[] }> = [
 
 function podLabel(state: string): string {
 	switch (state) {
-		case 'warm': return 'RunPod warm';
-		case 'running': return 'RunPod running';
+		case 'warm': return 'GPU pod warm';
+		case 'running': return 'GPU pod running';
 		case 'starting': return 'Starting pod…';
 		case 'stopping': return 'Stopping pod…';
 		case 'stopped': return 'Pod stopped';
-		case 'direct-vllm': return 'vLLM direct';
-		case 'not-configured': return 'Local / direct';
+		case 'gateway-connected':
+		case 'direct-vllm': return 'Gateway connected';
+		case 'not-configured': return 'Not configured';
 		default: return state;
 	}
 }

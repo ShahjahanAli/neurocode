@@ -46,8 +46,8 @@ app.get('/health', async (req, res) => {
 			const podStatus = await runpodManager.getStatus().catch(() => ({ podState: 'unknown' }));
 			podState = podStatus.podState;
 			idleRemainingMs = podStatus.idleRemainingMs ?? null;
-		} else if (provider === 'vllm' && available) {
-			podState = 'direct-vllm';
+		} else if (provider === 'gateway' && available) {
+			podState = 'gateway-connected';
 		}
 
 		const projectPath = String(req.query.projectPath ?? '');
@@ -115,8 +115,12 @@ if (POD_ID && RUNPOD_KEY && !AIRGAP) {
 	runpodManager = new RunPodLifecycleManager({
 		podId: POD_ID,
 		apiKey: RUNPOD_KEY,
-		vllmUrl: process.env.NEUROCODE_VLLM_URL || '',
-		vllmApiKey: process.env.NEUROCODE_VLLM_KEY || '',
+		apiBaseUrl: process.env.NEUROCODE_LLM_API_URL
+			|| process.env.NEUROCODE_VLLM_URL
+			|| '',
+		gatewayApiKey: process.env.NEUROCODE_LLM_API_KEY
+			|| process.env.NEUROCODE_VLLM_KEY
+			|| '',
 		idleTimeoutMs: parseInt(process.env.NEUROCODE_RUNPOD_IDLE_MS || '1800000', 10),
 		autoStop: process.env.NEUROCODE_RUNPOD_AUTO_STOP !== 'false',
 		db,

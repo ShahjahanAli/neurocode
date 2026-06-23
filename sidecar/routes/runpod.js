@@ -10,13 +10,13 @@ router.get('/status', async (_req, res) => {
 		try {
 			await LLMRouter.getAdapter();
 			const provider = LLMRouter.getActiveProvider();
-			if (provider === 'vllm') {
+			if (provider === 'gateway') {
 				const modelInfo = await LLMRouter.getAdapter().then((a) => a.getModelInfo());
 				return res.json({
 					success: true,
 					data: {
-						podState: 'direct-vllm',
-						provider: 'vllm',
+						podState: 'gateway-connected',
+						provider: 'gateway',
 						model: modelInfo?.name,
 						lifecycleConfigured: false,
 					},

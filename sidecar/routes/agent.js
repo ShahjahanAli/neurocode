@@ -68,7 +68,7 @@ router.post('/ask', async (req, res) => {
 			services.runpodManager.resetIdleTimer();
 		}
 
-		if (provider === 'vllm' && services.runpodManager?.currentSessionId) {
+		if (provider === 'gateway' && services.runpodManager?.currentSessionId) {
 			services.db.prepare(
 				'UPDATE runpod_sessions SET llm_calls = llm_calls + 1 WHERE id = ?',
 			).run(services.runpodManager.currentSessionId);
@@ -126,7 +126,7 @@ router.post('/ask', async (req, res) => {
 
 router.post('/chat', async (req, res) => {
 	try {
-		const { task, activeFile, projectPath, history, forceIntent, chatMode, fixOnCheck, attachments } = req.body ?? {};
+		const { task, activeFile, projectPath, history, forceIntent, chatMode, fixOnCheck, attachments, modelSelection, selectedModel } = req.body ?? {};
 		if (!task || !projectPath) {
 			return res.status(400).json({ success: false, error: 'task and projectPath required' });
 		}
@@ -140,6 +140,8 @@ router.post('/chat', async (req, res) => {
 			chatMode,
 			fixOnCheck,
 			attachments,
+			modelSelection,
+			selectedModel,
 		});
 
 		res.json({ success: true, data });
@@ -157,7 +159,7 @@ router.post('/chat/stream', async (req, res) => {
 	res.setHeader('Connection', 'keep-alive');
 	res.flushHeaders();
 
-	const { task, activeFile, projectPath, history, forceIntent, chatMode, fixOnCheck, attachments } = req.body ?? {};
+	const { task, activeFile, projectPath, history, forceIntent, chatMode, fixOnCheck, attachments, modelSelection, selectedModel } = req.body ?? {};
 	if (!task || !projectPath) {
 		res.write(`data: ${JSON.stringify({ type: 'error', message: 'task and projectPath required' })}\n\n`);
 		res.write('data: [DONE]\n\n');
@@ -166,7 +168,7 @@ router.post('/chat/stream', async (req, res) => {
 
 	await streamOrchestratedChat(
 		services,
-		{ task, activeFile, projectPath, history, forceIntent, chatMode, fixOnCheck, attachments },
+		{ task, activeFile, projectPath, history, forceIntent, chatMode, fixOnCheck, attachments, modelSelection, selectedModel },
 		(event) => {
 			res.write(`data: ${JSON.stringify(event)}\n\n`);
 		},
@@ -189,6 +191,9 @@ router.post('/loop/stream', async (req, res) => {
 		history,
 		maxSteps,
 		attachments,
+		modelSelection,
+		selectedModel,
+		chatMode,
 	} = req.body ?? {};
 
 	if (!task || !projectPath) {
@@ -199,7 +204,7 @@ router.post('/loop/stream', async (req, res) => {
 
 	await streamAgentToolLoop(
 		services,
-		{ task, activeFile, projectPath, history, maxSteps, attachments },
+		{ task, activeFile, projectPath, history, maxSteps, attachments, modelSelection, selectedModel, chatMode },
 		(event) => {
 			res.write(`data: ${JSON.stringify(event)}\n\n`);
 		},

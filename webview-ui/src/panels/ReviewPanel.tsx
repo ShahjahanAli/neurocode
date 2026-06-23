@@ -30,7 +30,7 @@ export function ReviewPanel({ embedded = false }: { embedded?: boolean }) {
 	return (
 		<div className={`panel${embedded ? ' panel-embedded' : ''}`}>
 			<h3 style={{ margin: 0 }}>Code Review</h3>
-			{provider && <span className="badge">Running on {provider === 'vllm' ? 'Qwen3 · RunPod L4' : 'Ollama'}</span>}
+			{provider && <span className="badge">Running on {provider === 'gateway' ? 'LLM gateway' : 'Ollama'}</span>}
 			<button onClick={start} disabled={running}>{running ? 'Reviewing...' : 'Start Review (Ctrl+Shift+R)'}</button>
 			{results.map((r, i) => (
 				<div key={i} className={`agent-card ${AGENT_COLORS[r.agentType] ?? ''}`}>

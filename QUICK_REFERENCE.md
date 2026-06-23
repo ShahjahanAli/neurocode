@@ -1,5 +1,5 @@
-# NeuroCode — Quick Reference Card v3.1
-## Primary: RunPod L4 24GB + Qwen3-Coder via vLLM | Fallback: Ollama
+# NeuroCode — Quick Reference Card v3.2
+## Primary: OpenAI-compatible gateway | Local: Ollama | Optional: RunPod pod lifecycle
 
 ---
 
@@ -9,10 +9,29 @@
 
 | Panel | Location | Setting |
 |---|---|---|
-| **Chat** | Right secondary sidebar (default) | `neurocode.ui.chatLocation: right` |
-| Tasks, Shards, Review, Memory, Debug | Left activity bar | — |
+| **Chat, Analytics, Drift, Genome** | Right secondary sidebar (default) | `neurocode.ui.chatLocation: right` |
+| Overview, Tasks, Shards, Review, Memory, Debug | Right sidebar tabs (same panel) | — |
 
 Reload window after changing `chatLocation`.
+
+### Model picker (chat toolbar)
+
+| Selection | Behavior |
+|---|---|
+| **Auto** | `ModelSelector` picks best model per intent (explain → fast; implement/agent → coder) |
+| **Manual** | Uses `neurocode.llm.selectedModel` from `GET /v1/models` |
+
+Separate from chat mode **Auto** (intent routing). SSE `intent` event includes resolved `model`.
+
+### Attachments (paperclip)
+
+| Type | Shard reason |
+|---|---|
+| Current file | `attached file` |
+| Editor selection | `attached selection` |
+| Browsed files | `attached file` |
+
+Max: `neurocode.chat.maxAttachments` (default 5). Priority 0 in shard assembly.
 
 ### Chat modes (toolbar)
 
@@ -45,6 +64,9 @@ Reload window after changing `chatLocation`.
 | `neurocode.chat.fixOnCheck` | `true` |
 | `neurocode.chat.agentMaxSteps` | `8` (plan-step agent) |
 | `neurocode.chat.agentToolMaxSteps` | `10` (tool loop) |
+| `neurocode.chat.maxAttachments` | `5` |
+| `neurocode.llm.mode` | `gateway` |
+| `neurocode.llm.modelSelection` | `auto` |
 | `neurocode.indexing.autoIndex` | `true` |
 
 ### Intent routing (`IntentResolver.js`)
@@ -61,19 +83,21 @@ Reload window after changing `chatLocation`.
 ```
 Extension Host (TypeScript)     Sidecar Node.js :39291           LLM Backend
 ────────────────────────        ────────────────────────          ──────────────────
-extension.ts                    server.js                         PRIMARY (vLLM)
-SidecarManager.ts    ──►        LLMRouter.js             ──►     RunPod L4 24GB
-SidecarClient.ts                  ├─ VLLMAdapter.js               Qwen3-Coder-AWQ
-AttentionHeatmap.ts               └─ OllamaAdapter.js    ──►     FALLBACK (Ollama)
+extension.ts                    server.js                         GATEWAY (primary)
+SidecarManager.ts    ──►        LLMRouter.js             ──►     OpenAI-compatible /v1
+SidecarClient.ts                  ├─ OpenAICompatibleAdapter.js     LiteLLM / vLLM / custom
+AttentionHeatmap.ts               └─ OllamaAdapter.js    ──►     Ollama (mode or fallback)
 ChatPanel.ts                    ChatOrchestrator.js
-MessageMarkdown.tsx             IntentResolver.js
-CollapsibleCodeBlock.tsx        AgentToolLoop.js
-ReviewPanel.ts                  AgentTools.js
-MemoryPanel.ts                  FileReview.js
-DebugPanel.ts                   ShardManager.js
-TaskQueuePanel.ts               RunPodLifecycleManager.js
-ShardVisualizerPanel.tsx        MultiAgentRunner.js      EMBEDDINGS (always Ollama)
-RunPodStatusBadge.tsx           ProjectMemoryGraph.js    ──►     nomic-embed-text
+ModelPicker.tsx                 ModelSelector.js
+ChatAttachments.tsx             IntentResolver.js
+MessageMarkdown.tsx             AgentToolLoop.js
+CollapsibleCodeBlock.tsx        AgentTools.js
+ReviewPanel.ts                  FileReview.js
+DriftPanel.tsx                  FileQueue.js
+GenomePanel.tsx                 ShardManager.js
+DebugPanel.ts                   RunPodLifecycleManager.js (optional)
+TaskQueuePanel.ts               MultiAgentRunner.js      EMBEDDINGS (always Ollama)
+LlmConnectionBadge.tsx          ProjectMemoryGraph.js    ──►     nomic-embed-text
                                 SemanticDriftDetector.js          localhost:11434
                                 CausalDebugAgent.js
                                 CrossRepoIndexer.js
@@ -85,20 +109,18 @@ RunPodStatusBadge.tsx           ProjectMemoryGraph.js    ──►     nomic-emb
 
 ## Key Numbers
 
-| Parameter | RunPod (vLLM) | Ollama (fallback) |
+| Parameter | Gateway mode | Ollama mode |
 |---|---|---|
 | Token budget per shard | **6000** | **3500** |
-| LLM model | Qwen3-Coder-30B-AWQ | qwen2.5-coder:7b |
-| GPU | L4 24GB | Local GPU/CPU |
+| LLM model | From gateway (`model` / auto picker) | `ollamaModel` setting |
 | Timeout per call | 120 seconds | 60 seconds |
-| Cost | ~$0.44/hr RunPod | $0 |
-| Prompt style | Qwen3-specific | Generic |
+| Cost | Gateway billing | $0 local |
 
 | Other Parameters | Value |
 |---|---|
 | Sidecar port | 39291 (127.0.0.1 only) |
 | Max plan steps | 8 |
-| Max implement output tokens | up to 4000 (vLLM budget − 500) |
+| Max implement output tokens | up to 4000 (gateway budget − 500) |
 | Max agent tool steps | 10 (`agentToolMaxSteps`) |
 | Auto-continue rounds | 8 (`maxContinueRounds`) |
 | Collapse code blocks at | 5+ lines |
@@ -116,7 +138,7 @@ RunPodStatusBadge.tsx           ProjectMemoryGraph.js    ──►     nomic-emb
 
 ---
 
-## RunPod Pod State Machine
+## RunPod Pod State Machine (optional — `neurocode.runpod.*`)
 
 ```
 stopped ──[start()]──► starting ──[/v1/models ready]──► running ──[warmup]──► warm
@@ -128,15 +150,13 @@ warm → idle timer fires → stopping → stopped
 any error → unknown → manual restart
 ```
 
-## Status Bar per Pod State
+## Status Bar States
 
-| State | Status Bar Text |
+| State | Status Bar Text (examples) |
 |---|---|
-| stopped | `$(circle-slash) NeuroCode \| RunPod stopped \| fallback: Ollama` |
-| starting | `$(sync~spin) NeuroCode \| Starting RunPod L4...` |
-| running | `$(remote-explorer) NeuroCode \| Qwen3 on RunPod L4 \| {N} files` |
-| warm | `$(rocket) NeuroCode \| Qwen3 🔥 warm \| {N} files` |
-| stopping | `$(sync~spin) NeuroCode \| RunPod stopping...` |
+| gateway connected | `$(cloud) NeuroCode \| {model} \| {N} files` |
+| ollama mode | `$(server) NeuroCode \| {ollamaModel} \| {N} files` |
+| pod starting (optional) | `$(sync~spin) NeuroCode \| Starting GPU pod...` |
 | air-gap | `$(shield) NeuroCode [AIR-GAP] \| {model} \| {N} files` |
 
 ---
@@ -145,6 +165,7 @@ any error → unknown → manual restart
 
 | Priority | Source | Token Budget Rule |
 |---|---|---|
+| 0 | User attachments (file / selection) | High priority — included when possible |
 | 1 | Active file (cursor) | Never cut, never removed |
 | 2 | Files active file imports | From SQLite dependencies |
 | 3 | Files that import active file | Callers |
@@ -152,7 +173,7 @@ any error → unknown → manual restart
 | 5 | Vector similarity top-3 | Semantic match via nomic-embed |
 | 6 | Type definitions | Last to add, first to cut |
 
-Budget: **6000 tokens** when RunPod active · **3500 tokens** when Ollama fallback
+Budget: **6000 tokens** in gateway mode · **3500 tokens** in Ollama mode (or `maxTokens: 0` for auto)
 
 ---
 
@@ -163,8 +184,8 @@ Budget: **6000 tokens** when RunPod active · **3500 tokens** when Ollama fallba
 | neurocode.askAgent | Ctrl+Shift+A | Ask agent (auto-starts pod if stopped) |
 | neurocode.reviewCode | Ctrl+Shift+R | 4 parallel specialist agents |
 | neurocode.debugCause | Ctrl+Shift+D | Stack trace → root cause |
-| neurocode.startPod | — | Manually start RunPod pod |
-| neurocode.stopPod | — | Manually stop RunPod pod (save cost) |
+| neurocode.startPod | — | Manually start optional GPU pod |
+| neurocode.stopPod | — | Manually stop optional GPU pod |
 | neurocode.planTask | — | Multi-step task planner |
 | neurocode.indexProject | — | Re-index full project |
 | neurocode.showMemory | — | Open project memory viewer |
@@ -185,8 +206,12 @@ Indexer
 Agent
   POST /agent/ask              → legacy single-turn (no intent routing)
   POST /agent/chat             → orchestrated chat (intent + history)
-  POST /agent/chat/stream      → SSE: intent, token, done, error
+  POST /agent/chat/stream      → SSE: intent (incl. model), token, done, error
   POST /agent/loop/stream      → SSE: step, tool_start, tool_result, token, done
+
+LLM
+  GET  /llm/models             → { models[] } from gateway
+  POST /llm/resolve            → { modelId, reason } for auto/manual selection
   POST /agent/plan             → { planId, steps[] }
   POST /agent/plan/:id/execute → { stepId, status, response, diff }
 
@@ -221,7 +246,7 @@ Cross-Repo
   GET  /crossrepo/list      → { projects[] }
   POST /crossrepo/search    → { results[] }
 
-RunPod Lifecycle (NEW)
+RunPod Lifecycle (optional)
   GET  /runpod/status       → { podState, podId, costPerHr, sessionMinutes, idleRemainingMs }
   POST /runpod/start        → { podState: 'starting' }
   POST /runpod/stop         → { podState: 'stopping' }
@@ -239,14 +264,22 @@ NEUROCODE_PORT=39291
 NEUROCODE_PROJECT=/path/to/workspace
 
 # LLM routing
-NEUROCODE_LLM_PROVIDER=vllm           # 'vllm' or 'ollama'
-NEUROCODE_VLLM_URL=https://YOUR_POD-8000.proxy.runpod.net/v1
-NEUROCODE_VLLM_KEY=your-runpod-api-key
-NEUROCODE_VLLM_MODEL=Qwen/Qwen2.5-Coder-32B-Instruct-AWQ
+NEUROCODE_LLM_MODE=gateway              # 'gateway' or 'ollama'
+NEUROCODE_API_BASE_URL=https://your-gateway/v1
+NEUROCODE_API_KEY=your-bearer-token
+NEUROCODE_LLM_MODEL=qwen3-coder
+NEUROCODE_LLM_MODEL_SELECTION=auto      # 'auto' or 'manual'
+NEUROCODE_LLM_SELECTED_MODEL=           # when manual
 NEUROCODE_OLLAMA_URL=http://localhost:11434
 NEUROCODE_OLLAMA_MODEL=qwen2.5-coder:7b
+NEUROCODE_FALLBACK_TO_OLLAMA=false
 
-# Shard budget (0 = auto: 6000 for vLLM, 3500 for Ollama)
+# Legacy (still mapped)
+NEUROCODE_VLLM_URL=...
+NEUROCODE_VLLM_KEY=...
+NEUROCODE_VLLM_MODEL=...
+
+# Shard budget (0 = auto: 6000 gateway, 3500 Ollama)
 SHARD_MAX_TOKENS=0
 
 # RunPod lifecycle
@@ -334,7 +367,7 @@ Idle auto-stop at 30 min saves ~$10–20/month vs leaving pod running.
 
 | Moat | What | Why Acquirers Buy |
 |---|---|---|
-| **Technical** | Shard arch on 7B models + RunPod integration | Google device runtime / Meta on-prem Copilot |
+| **Technical** | Shard arch on 7B models + gateway-agnostic LLM routing | Google device runtime / Meta on-prem Copilot |
 | **Data** | Edit Genome — anonymized human-verified edits | LLM labs: training data they can't get elsewhere |
 | **Market** | Air-Gap Mode + compliance | SpaceX/defense/healthcare: markets Copilot can't enter |
 
@@ -350,5 +383,5 @@ Idle auto-stop at 30 min saves ~$10–20/month vs leaving pod running.
 
 ---
 
-*NeuroCode v3.1 — ZMS Digital Solutions, Dhaka, Bangladesh*
-*RunPod L4 24GB · Qwen3-Coder · vLLM · Ollama fallback*
+*NeuroCode v3.2 — ZMS Digital Solutions, Dhaka, Bangladesh*
+*OpenAI-compatible gateway · Ollama · optional RunPod pod lifecycle*

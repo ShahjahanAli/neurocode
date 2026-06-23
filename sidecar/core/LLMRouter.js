@@ -1,80 +1,53 @@
-import { VLLMAdapter } from '../adapters/VLLMAdapter.js';
+import { OpenAICompatibleAdapter } from '../adapters/OpenAICompatibleAdapter.js';
 import { OllamaAdapter } from '../adapters/OllamaAdapter.js';
-import { OpenAIAdapter } from '../adapters/OpenAIAdapter.js';
 
-/** @type {import('../adapters/VLLMAdapter.js').VLLMAdapter | import('../adapters/OllamaAdapter.js').OllamaAdapter | import('../adapters/OpenAIAdapter.js').OpenAIAdapter | null} */
+/** @type {OpenAICompatibleAdapter | OllamaAdapter | null} */
 let _adapter = null;
 
-/** @type {'vllm' | 'ollama' | 'openai' | null} */
+/** @type {'gateway' | 'ollama' | null} */
 let _adapterType = null;
 
 /**
- * Routes LLM requests to vLLM (RunPod), OpenAI, or Ollama with optional fallback.
+ * Routes LLM requests to an OpenAI-compatible gateway or local Ollama.
  */
 export class LLMRouter {
 	/**
-	 * Returns the best available adapter.
+	 * Returns the active LLM adapter.
 	 * @param {object | null} config - Optional env-derived config override.
-	 * @returns {Promise<import('../adapters/VLLMAdapter.js').VLLMAdapter | import('../adapters/OllamaAdapter.js').OllamaAdapter | import('../adapters/OpenAIAdapter.js').OpenAIAdapter>}
+	 * @returns {Promise<OpenAICompatibleAdapter | OllamaAdapter>}
 	 */
 	static async getAdapter(config = null) {
 		const cfg = config || LLMRouter._readEnvConfig();
 		const airgap = process.env.NEUROCODE_AIRGAP === 'true';
+		const mode = cfg.mode;
 
-		if (!airgap && cfg.provider === 'openai' && cfg.openaiApiKey) {
-			const openai = new OpenAIAdapter({
-				baseUrl: cfg.openaiUrl || 'https://api.openai.com/v1',
-				apiKey: cfg.openaiApiKey,
-				model: cfg.openaiModel || 'gpt-4o-mini',
+		if (!airgap && mode === 'gateway' && cfg.apiBaseUrl) {
+			const gateway = new OpenAICompatibleAdapter({
+				baseUrl: cfg.apiBaseUrl,
+				apiKey: cfg.apiKey,
+				model: cfg.model,
+				label: cfg.gatewayLabel,
 			});
 
-			const available = await openai.isAvailable().catch(() => false);
+			const available = await gateway.isAvailable().catch(() => false);
 			if (available) {
-				if (_adapterType !== 'openai') {
-					console.log(`[LLMRouter] Using OpenAI: ${cfg.openaiModel}`);
-					_adapterType = 'openai';
+				if (_adapterType !== 'gateway') {
+					console.log(`[LLMRouter] Using gateway: ${cfg.model} @ ${cfg.apiBaseUrl}`);
+					_adapterType = 'gateway';
 				}
-				_adapter = openai;
-				return openai;
+				_adapter = gateway;
+				return gateway;
 			}
 
 			const allowFallback = process.env.NEUROCODE_LLM_FALLBACK === 'true';
 			if (!allowFallback) {
 				throw new Error(
-					'OpenAI is unreachable. Check neurocode.llm.openaiUrl and neurocode.llm.openaiApiKey. ' +
+					'LLM gateway is unreachable. Check neurocode.llm.apiBaseUrl, neurocode.llm.apiKey, and neurocode.llm.model. ' +
 					'Set neurocode.llm.fallbackToOllama to true to use local Ollama as backup.',
 				);
 			}
-			console.warn('[LLMRouter] OpenAI unavailable — falling back to Ollama');
-		}
-
-		if (!airgap && cfg.provider === 'vllm' && cfg.vllmUrl) {
-			const vllm = new VLLMAdapter({
-				baseUrl: cfg.vllmUrl,
-				apiKey: cfg.vllmApiKey,
-				model: cfg.vllmModel,
-			});
-
-			const available = await vllm.isAvailable().catch(() => false);
-			if (available) {
-				if (_adapterType !== 'vllm') {
-					console.log(`[LLMRouter] Using vLLM: ${cfg.vllmModel} on RunPod`);
-					_adapterType = 'vllm';
-				}
-				_adapter = vllm;
-				return vllm;
-			}
-
-			const allowFallback = process.env.NEUROCODE_LLM_FALLBACK === 'true';
-			if (!allowFallback) {
-				throw new Error(
-					'RunPod vLLM is unreachable. Check neurocode.llm.vllmUrl and neurocode.llm.vllmApiKey. ' +
-					'Set neurocode.llm.fallbackToOllama to true to use local Ollama as backup.',
-				);
-			}
-
-			console.warn('[LLMRouter] vLLM unavailable — falling back to Ollama');
-		} else if (airgap) {
+			console.warn('[LLMRouter] Gateway unavailable — falling back to Ollama');
+		} else if (airgap && mode === 'gateway') {
 			console.log('[LLMRouter] Air-gap mode — Ollama only');
 		}
 
@@ -90,33 +63,94 @@ export class LLMRouter {
 		return ollama;
 	}
 
-	/** @returns {'vllm' | 'ollama' | 'openai' | null} */
+	/** @returns {'gateway' | 'ollama' | null} */
 	static getActiveProvider() {
 		return _adapterType;
 	}
 
-	/** @returns {number} Dynamic shard token budget based on active provider. */
+	/**
+	 * Lists models from the configured gateway or local Ollama.
+	 * @returns {Promise<Array<{ id: string, owned_by?: string }>>}
+	 */
+	static async listModels() {
+		const cfg = LLMRouter._readEnvConfig();
+		const airgap = process.env.NEUROCODE_AIRGAP === 'true';
+
+		if (!airgap && cfg.mode === 'gateway' && cfg.apiBaseUrl) {
+			const gateway = new OpenAICompatibleAdapter({
+				baseUrl: cfg.apiBaseUrl,
+				apiKey: cfg.apiKey,
+				model: cfg.model,
+			});
+			const models = await gateway.listModels();
+			if (models.length > 0) {
+				return models;
+			}
+		}
+
+		const ollama = new OllamaAdapter({
+			baseUrl: cfg.ollamaUrl,
+			model: cfg.ollamaModel,
+		});
+		return ollama.listModels();
+	}
+
+	/**
+	 * Applies a per-request model override on the active adapter.
+	 * @param {OpenAICompatibleAdapter | OllamaAdapter} adapter
+	 * @param {string} model
+	 */
+	static applyModel(adapter, model) {
+		if (model && typeof adapter.setModel === 'function') {
+			adapter.setModel(model);
+		}
+	}
+
+	/** @returns {number} Dynamic shard token budget based on active backend. */
 	static getTokenBudget() {
 		const manual = parseInt(process.env.SHARD_MAX_TOKENS || '0', 10);
 		if (manual > 0) {
 			return manual;
 		}
-		if (_adapterType === 'vllm' || _adapterType === 'openai') {
-			return 6000;
-		}
-		return 3500;
+		return _adapterType === 'gateway' ? 6000 : 3500;
 	}
 
-	/** @returns {object} Environment-derived LLM configuration. */
+	/**
+	 * Normalizes legacy and new env vars into one config object.
+	 * @returns {object}
+	 */
 	static _readEnvConfig() {
+		const legacyProvider = process.env.NEUROCODE_LLM_PROVIDER || '';
+		const mode = process.env.NEUROCODE_LLM_MODE
+			|| (legacyProvider === 'ollama' ? 'ollama' : 'gateway');
+
+		const apiBaseUrl = (
+			process.env.NEUROCODE_LLM_API_URL
+			|| process.env.NEUROCODE_VLLM_URL
+			|| process.env.NEUROCODE_OPENAI_URL
+			|| ''
+		).trim();
+
+		const apiKey = (
+			process.env.NEUROCODE_LLM_API_KEY
+			|| process.env.NEUROCODE_VLLM_KEY
+			|| process.env.NEUROCODE_OPENAI_KEY
+			|| ''
+		).trim();
+
+		const model = (
+			process.env.NEUROCODE_LLM_MODEL
+			|| process.env.NEUROCODE_VLLM_MODEL
+			|| process.env.NEUROCODE_OPENAI_MODEL
+			|| 'qwen2.5-coder:7b'
+		).trim();
+
 		return {
-			provider: process.env.NEUROCODE_LLM_PROVIDER || 'vllm',
-			vllmUrl: process.env.NEUROCODE_VLLM_URL || '',
-			vllmApiKey: process.env.NEUROCODE_VLLM_KEY || '',
-			vllmModel: process.env.NEUROCODE_VLLM_MODEL || 'Qwen/Qwen2.5-Coder-32B-Instruct-AWQ',
-			openaiUrl: process.env.NEUROCODE_OPENAI_URL || 'https://api.openai.com/v1',
-			openaiApiKey: process.env.NEUROCODE_OPENAI_KEY || '',
-			openaiModel: process.env.NEUROCODE_OPENAI_MODEL || 'gpt-4o-mini',
+			mode,
+			apiBaseUrl,
+			apiKey,
+			model,
+			gatewayLabel: process.env.NEUROCODE_LLM_GATEWAY_LABEL || 'LLM gateway',
 			ollamaUrl: process.env.NEUROCODE_OLLAMA_URL || 'http://localhost:11434',
 			ollamaModel: process.env.NEUROCODE_OLLAMA_MODEL || 'qwen2.5-coder:7b',
 		};

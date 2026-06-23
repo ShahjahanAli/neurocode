@@ -1,10 +1,12 @@
-# NeuroCode — Build Blueprint v3.0
-## VS Code Extension · Agentic Coding · RunPod L4 24GB + Qwen3-Coder via vLLM
+# NeuroCode — Build Blueprint v3.2
+## VS Code Extension · Agentic Coding · OpenAI-Compatible Gateway + Ollama
 ## Built for Acquisition: Google / Meta / SpaceX / GitHub
 
 > Read this before writing any code.
-> Primary LLM backend: RunPod L4 24GB running Qwen3-Coder-30B-A3B-AWQ via vLLM
-> Fallback: Ollama localhost with qwen2.5-coder:7b
+> **Primary LLM:** any OpenAI-compatible gateway (`neurocode.llm.apiBaseUrl` + `/v1`)
+> **Local mode:** Ollama (`neurocode.llm.mode: ollama`)
+> **Optional:** RunPod GPU pod lifecycle (independent of gateway URL)
+> **Embeddings:** always Ollama (`nomic-embed-text`)
 > Three moats: Shard Architecture · Edit Genome · Air-Gap Mode
 
 ---
@@ -12,24 +14,83 @@
 ## What We're Building
 
 NeuroCode is a VS Code extension with full agentic coding capability. The primary LLM
-backend is your RunPod L4 GPU running Qwen3-Coder via vLLM — the same infrastructure
-you already have running. When RunPod is offline (cost saving), it falls back to local
-Ollama automatically. A built-in pod lifecycle manager starts, warms up, and stops your
-RunPod pod automatically based on coding activity.
+backend is **any OpenAI-compatible API** — your custom AI gateway, LiteLLM, vLLM on RunPod,
+OpenAI, or another cloud proxy. Configure `neurocode.llm.apiBaseUrl` once; the sidecar uses
+`OpenAICompatibleAdapter` for all gateway traffic. **Ollama** is a first-class mode for local-only
+or optional fallback. **RunPod** pod start/stop/warmup is optional and separate from LLM routing.
 
 ---
 
-## Chat & Agent System (v3.1)
+## Current Architecture (v3.2) — supersedes RunPod-centric steps below
+
+### LLM routing
+
+```
+resolveLlmConfig() (extension) → env vars → sidecar LLMRouter
+  mode=gateway → OpenAICompatibleAdapter → GET/POST {apiBaseUrl}/v1/*
+  mode=ollama  → OllamaAdapter
+  fallbackToOllama=true → try gateway, then Ollama on failure
+```
+
+Legacy settings (`vllmUrl`, `openaiUrl`, `provider`) map to `apiBaseUrl` / `apiKey` / `model` automatically.
+
+### Model selection (Cursor-style)
+
+| Setting | Behavior |
+|---------|----------|
+| `modelSelection: auto` | `ModelSelector.resolveModelId()` picks coder vs fast model per intent/mode |
+| `modelSelection: manual` | Uses `selectedModel` from gateway `GET /v1/models` |
+
+API: `GET /llm/models`, `POST /llm/resolve`. SSE `intent` event includes resolved `model`.
+
+### Right sidebar tabs
+
+Overview | Chat | Analytics | Tasks | Shards | Review | Memory | **Drift** | **Genome** | Debug
+
+### New / updated modules
+
+| File | Role |
+|------|------|
+| `sidecar/adapters/OpenAICompatibleAdapter.js` | Any `/v1/chat/completions` gateway |
+| `sidecar/core/LLMRouter.js` | `gateway` \| `ollama` routing |
+| `sidecar/core/ModelSelector.js` | Auto model heuristics |
+| `sidecar/routes/llm.js` | Models list + resolve |
+| `sidecar/core/FileQueue.js` | Serialized indexer/shard file reads |
+| `webview-ui/.../ModelPicker.tsx` | Chat toolbar model dropdown |
+| `webview-ui/.../LlmConnectionBadge.tsx` | Gateway vs Ollama status |
+| `webview-ui/.../ChatAttachments.tsx` | File/selection attachments |
+| `webview-ui/.../DriftPanel.tsx` | Semantic drift UI |
+| `webview-ui/.../GenomePanel.tsx` | Edit genome stats/export |
+
+### Settings (primary)
+
+```json
+{
+  "neurocode.llm.mode": "gateway",
+  "neurocode.llm.apiBaseUrl": "https://your-gateway/v1",
+  "neurocode.llm.apiKey": "...",
+  "neurocode.llm.model": "default-model-id",
+  "neurocode.llm.modelSelection": "auto",
+  "neurocode.llm.selectedModel": "",
+  "neurocode.llm.fallbackToOllama": false,
+  "neurocode.chat.maxAttachments": 5
+}
+```
+
+---
+
+## Chat & Agent System (v3.2)
 
 NeuroCode chat is **Cursor-aligned**: natural language in, routed behavior out.
 
 ### Architecture
 
 ```
-User message + mode pill
+User message + mode pill + model picker + attachments
     → Extension: ChatPanel (SSE client)
-    → Sidecar: assembleContext (shards)
+    → Sidecar: assembleContext (shards, attachments priority 0)
     → IntentResolver (Auto) OR forced mode
+    → ModelSelector (auto/manual) → bindAdapterForRequest
     → Branch:
         Ask/Edit/Plan → ChatOrchestrator (single or continued stream)
         Agent         → AgentToolLoop (multi-step tools)
@@ -41,13 +102,16 @@ User message + mode pill
 | File | Role |
 |------|------|
 | `sidecar/core/IntentResolver.js` | NLU scoring + history follow-ups |
+| `sidecar/core/ModelSelector.js` | Auto/manual model resolution |
 | `sidecar/core/ChatOrchestrator.js` | SSE chat/plan stream |
 | `sidecar/core/AgentToolLoop.js` | Agent mode tool iteration |
 | `sidecar/core/AgentTools.js` | read / search / write / reply |
 | `sidecar/core/FileReview.js` | Incomplete file detection, fix-on-check |
-| `src/panels/ChatPanel.ts` | Stream relay, auto-apply, agent loop |
+| `sidecar/adapters/OpenAICompatibleAdapter.js` | Gateway LLM |
+| `src/panels/ChatPanel.ts` | Stream relay, auto-apply, agent loop, attachments |
 | `src/utils/DiffApplier.ts` | Parse & apply code blocks |
 | `webview-ui/.../MessageMarkdown.tsx` | Collapsible code cards |
+| `webview-ui/.../ModelPicker.tsx` | Model Auto / Manual picker |
 
 ### View containers (`package.json`)
 
@@ -62,7 +126,7 @@ Chat webview IDs: `neurocode.chatView` (right), `neurocode.chatViewLeft` (left).
 
 ### SSE event types
 
-**`/agent/chat/stream`:** `intent` · `token` · `done` · `error`
+**`/agent/chat/stream`:** `intent` (includes `model`) · `token` · `done` · `error`
 
 **`/agent/loop/stream`:** `intent` · `step` · `tool_start` · `tool_result` · `token` · `done` · `error`
 
@@ -77,15 +141,15 @@ node --version
 # 2. VS Code Extension tools
 npm install -g @vscode/vsce yo generator-code
 
-# 3. Ollama (fallback LLM)
+# 3. Ollama (embeddings + local LLM mode)
 curl -fsSL https://ollama.ai/install.sh | sh
 ollama pull qwen2.5-coder:7b
 ollama pull nomic-embed-text      # embedding model — always local
 
-# 4. Verify your RunPod vLLM endpoint is live
-curl https://YOUR_POD_ID-8000.proxy.runpod.net/v1/models \
-  -H "Authorization: Bearer YOUR_RUNPOD_API_KEY"
-# Expected: { "data": [{ "id": "Qwen/Qwen2.5-Coder-32B-Instruct-AWQ" }] }
+# 4. Verify your OpenAI-compatible gateway (or RunPod vLLM proxy)
+curl https://YOUR_GATEWAY/v1/models \
+  -H "Authorization: Bearer YOUR_API_KEY"
+# Expected: { "data": [{ "id": "your-model-id" }] }
 
 # 5. Build tools for tree-sitter
 # macOS:   xcode-select --install
@@ -128,16 +192,20 @@ coverage
 
 ## Step 2 — VS Code Settings Configuration
 
-Before writing any code, configure your RunPod credentials in VS Code Settings (`Ctrl+,`):
+> **v3.2:** Use gateway settings below. Legacy `vllmUrl` / `provider` still work via migration.
+
+Before writing any code, configure your LLM gateway in VS Code Settings (`Ctrl+,`):
 
 ```json
 {
-  "neurocode.llm.provider": "vllm",
-  "neurocode.llm.vllmUrl": "https://YOUR_POD_ID-8000.proxy.runpod.net/v1",
-  "neurocode.llm.vllmApiKey": "YOUR_RUNPOD_API_KEY",
-  "neurocode.llm.vllmModel": "Qwen/Qwen2.5-Coder-32B-Instruct-AWQ",
+  "neurocode.llm.mode": "gateway",
+  "neurocode.llm.apiBaseUrl": "https://YOUR_GATEWAY_OR_POD_PROXY/v1",
+  "neurocode.llm.apiKey": "YOUR_API_KEY",
+  "neurocode.llm.model": "qwen3-coder",
+  "neurocode.llm.modelSelection": "auto",
   "neurocode.llm.ollamaUrl": "http://localhost:11434",
   "neurocode.llm.ollamaModel": "qwen2.5-coder:7b",
+  "neurocode.llm.fallbackToOllama": false,
   "neurocode.runpod.apiKey": "YOUR_RUNPOD_API_KEY",
   "neurocode.runpod.podId": "YOUR_POD_ID",
   "neurocode.runpod.autoStart": true,
@@ -147,7 +215,7 @@ Before writing any code, configure your RunPod credentials in VS Code Settings (
 }
 ```
 
-`shard.maxTokens: 0` means **auto** — the system sets 6000 for RunPod and 3500 for Ollama.
+`shard.maxTokens: 0` means **auto** — the system sets 6000 for gateway mode and 3500 for Ollama.
 
 ---
 
@@ -157,7 +225,7 @@ Before writing any code, configure your RunPod credentials in VS Code Settings (
 {
   "name": "neurocode",
   "displayName": "NeuroCode",
-  "description": "Agentic coding — RunPod L4 + Qwen3-Coder or local Ollama fallback",
+  "description": "Agentic coding — OpenAI-compatible gateway or local Ollama",
   "version": "0.1.0",
   "publisher": "zms-digital",
   "engines": { "vscode": "^1.85.0" },
@@ -343,9 +411,12 @@ CREATE INDEX IF NOT EXISTS idx_runpod_sessions ON runpod_sessions(started_at DES
 
 ---
 
-## Step 5 — VLLMAdapter (RunPod-Specific)
+## Step 5 — OpenAICompatibleAdapter (Gateway)
 
-### sidecar/adapters/VLLMAdapter.js
+> **v3.2:** `VLLMAdapter.js` and `OpenAIAdapter.js` are thin re-exports of `OpenAICompatibleAdapter.js`.
+> Use one adapter for any `/v1/chat/completions` endpoint.
+
+### sidecar/adapters/OpenAICompatibleAdapter.js
 
 ```javascript
 import axios from 'axios';

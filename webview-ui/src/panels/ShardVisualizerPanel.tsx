@@ -23,8 +23,8 @@ export function ShardVisualizerPanel({ embedded = false }: { embedded?: boolean 
 	}, []);
 
 	const pct = data ? Math.min(100, (data.totalTokens / data.budget) * 100) : 0;
-	const label = data?.provider === 'vllm'
-		? 'RunPod L4 · 6K context'
+	const label = data?.provider === 'gateway'
+		? 'Gateway · 6K context'
 		: 'Ollama · 3.5K context';
 
 	return (

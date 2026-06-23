@@ -56,7 +56,7 @@ export class EditGenomeCollector {
 			shardReasons: data.shardReasons ?? [],
 			accepted: data.accepted,
 			latencyMs: data.latencyMs,
-			provider: data.provider === 'vllm' ? 'vllm' : 'ollama',
+			provider: data.provider === 'gateway' ? 'gateway' : 'ollama',
 			modelClass: data.modelClass ?? 'unknown',
 			recordedAt: Date.now(),
 		};

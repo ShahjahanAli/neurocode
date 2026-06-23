@@ -30,7 +30,7 @@ export function MemoryPanel({ embedded = false }: { embedded?: boolean }) {
 				<div key={m.id} className="shard-card">
 					<div>{m.task_description}</div>
 					<div className="shard-reason">
-						weight: {m.weight?.toFixed(1)} · {m.provider === 'vllm' ? 'Qwen3 · RunPod' : 'Ollama'}
+						weight: {m.weight?.toFixed(1)} · {m.provider === 'gateway' ? 'Gateway' : 'Ollama'}
 					</div>
 				</div>
 			))}

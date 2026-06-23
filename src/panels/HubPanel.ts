@@ -101,7 +101,7 @@ export class HubPanelProvider implements vscode.WebviewViewProvider {
 				autoContinue: cfg.chat.autoContinue,
 				fixOnCheck: cfg.chat.fixOnCheck,
 				autoIndex: cfg.indexing.autoIndex,
-				provider: cfg.llm.provider,
+				provider: cfg.llm.mode,
 				tokenBudget: cfg.shard.maxTokens,
 				airgap: cfg.airgap.enabled,
 				heatmap: cfg.heatmap.enabled,

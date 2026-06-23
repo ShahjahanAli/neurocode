@@ -1,7 +1,7 @@
 import { ChangeReviewBar, type ChangeReviewSummary } from '../components/ChangeReviewBar';
 import { ChatAttachments, MessageAttachments, type ChatAttachment } from '../components/ChatAttachments';
 import { MessageFeedback } from '../components/MessageFeedback';
-import { RunPodStatusBadge } from '../components/RunPodStatusBadge';
+import { ModelPicker } from '../components/ModelPicker';
 import { GenomeConsentBanner } from '../components/GenomeConsentBanner';
 import { ShardCard } from '../components/ShardCard';
 import { MessageMarkdown } from '../components/MessageMarkdown';
@@ -65,6 +65,9 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean }) {
 	const [streamIntent, setStreamIntent] = useState<ChatIntent | null>(null);
 	const [streamAgentic, setStreamAgentic] = useState(false);
 	const [podState, setPodState] = useState('not-configured');
+	const [llmProvider, setLlmProvider] = useState<string | null>(null);
+	const [llmModel, setLlmModel] = useState<string | null>(null);
+	const [lifecycleConfigured, setLifecycleConfigured] = useState(false);
 	const [idleRemainingMs, setIdleRemainingMs] = useState<number | undefined>();
 	const [cost, setCost] = useState<{ estimatedCostUsd?: number; sessionMinutes?: number; llmCalls?: number }>();
 	const [indexing, setIndexing] = useState<string | null>(null);
@@ -72,6 +75,11 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean }) {
 	const [genomeConsent, setGenomeConsent] = useState(true);
 	const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>([]);
 	const [maxAttachments, setMaxAttachments] = useState(5);
+	const [modelSelection, setModelSelection] = useState<'auto' | 'manual'>('auto');
+	const [selectedModel, setSelectedModel] = useState('');
+	const [availableModels, setAvailableModels] = useState<Array<{ id: string; owned_by?: string }>>([]);
+	const [modelsLoading, setModelsLoading] = useState(false);
+	const [activeResolvedModel, setActiveResolvedModel] = useState<string | null>(null);
 	const messagesContainerRef = useRef<HTMLDivElement>(null);
 	const stickToBottomRef = useRef(true);
 
@@ -103,8 +111,21 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean }) {
 	useEffect(() => {
 		vscode.postMessage({ type: 'webviewReady' });
 		vscode.postMessage({ type: 'getGenomeConsent' });
+		vscode.postMessage({ type: 'requestModels' });
+		setModelsLoading(true);
 		const handler = (e: MessageEvent) => {
 			const msg = e.data;
+			if (msg.type === 'syncModelPreference') {
+				setModelSelection(msg.modelSelection ?? 'auto');
+				setSelectedModel(msg.selectedModel ?? '');
+			}
+			if (msg.type === 'modelsList') {
+				setAvailableModels(msg.models ?? []);
+				setModelsLoading(false);
+				if (msg.error) {
+					console.warn('[ChatPanel] models:', msg.error);
+				}
+			}
 			if (msg.type === 'syncAttachments') {
 				setPendingAttachments(msg.attachments ?? []);
 				if (typeof msg.maxAttachments === 'number') {
@@ -113,6 +134,9 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean }) {
 			}
 			if (msg.type === 'podStatus') {
 				setPodState(msg.data.podState);
+				setLlmProvider(msg.data.provider ?? null);
+				setLlmModel(msg.data.model ?? msg.data.modelName ?? null);
+				setLifecycleConfigured(Boolean(msg.data.lifecycleConfigured));
 				setIdleRemainingMs(msg.data.idleRemainingMs);
 				setCost(msg.data.cost);
 			}
@@ -154,6 +178,9 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean }) {
 			if (msg.type === 'streamIntent') {
 				setStreamIntent(msg.intent);
 				setStreamAgentic(Boolean(msg.agentic));
+				if (msg.model) {
+					setActiveResolvedModel(msg.model);
+				}
 				setMessages((m) => {
 					const copy = [...m];
 					const last = copy[copy.length - 1];
@@ -267,7 +294,7 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean }) {
 
 	const providerLabel = (p?: string, model?: string) => {
 		if (p === 'ollama') return `Ollama · ${model ?? 'local'}`;
-		if (p === 'vllm') return 'Qwen · RunPod';
+		if (p === 'gateway') return model ? `Gateway · ${model}` : 'LLM gateway';
 		return model ?? 'NeuroCode';
 	};
 
@@ -279,8 +306,11 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean }) {
 
 	return (
 		<div className={`panel chat-panel${embedded ? ' chat-panel-embedded' : ''}`}>
-			<RunPodStatusBadge
-				podState={podState as never}
+			<LlmConnectionBadge
+				podState={podState}
+				provider={llmProvider}
+				modelName={llmModel}
+				lifecycleConfigured={lifecycleConfigured}
 				idleRemainingMs={idleRemainingMs}
 				onStart={() => vscode.postMessage({ type: 'startPod' })}
 				onStop={() => vscode.postMessage({ type: 'stopPod' })}
@@ -437,19 +467,40 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean }) {
 			</div>
 
 			<div className="chat-toolbar">
-				<div className="mode-selector" role="tablist" aria-label="Chat mode">
-					{CHAT_MODES.map((mode) => (
-						<button
-							key={mode.id}
-							type="button"
-							className={`mode-pill${chatMode === mode.id ? ' active' : ''}`}
-							title={mode.hint}
-							disabled={loading}
-							onClick={() => setChatMode(mode.id)}
-						>
-							{mode.label}
-						</button>
-					))}
+				<div className="chat-toolbar-left">
+					<ModelPicker
+						modelSelection={modelSelection}
+						selectedModel={selectedModel}
+						models={availableModels}
+						activeModel={activeResolvedModel ?? llmModel}
+						loading={modelsLoading}
+						disabled={loading}
+						onChange={(selection, model) => {
+							setModelSelection(selection);
+							if (model) {
+								setSelectedModel(model);
+							}
+							vscode.postMessage({ type: 'setModelSelection', modelSelection: selection, selectedModel: model ?? selectedModel });
+						}}
+						onRefresh={() => {
+							setModelsLoading(true);
+							vscode.postMessage({ type: 'requestModels' });
+						}}
+					/>
+					<div className="mode-selector" role="tablist" aria-label="Chat mode">
+						{CHAT_MODES.map((mode) => (
+							<button
+								key={mode.id}
+								type="button"
+								className={`mode-pill${chatMode === mode.id ? ' active' : ''}`}
+								title={mode.hint}
+								disabled={loading}
+								onClick={() => setChatMode(mode.id)}
+							>
+								{mode.label}
+							</button>
+						))}
+					</div>
 				</div>
 				<button className="secondary toolbar-btn" type="button" onClick={() => vscode.postMessage({ type: 'clearChat' })} disabled={loading || messages.length === 0}>
 					Clear chat

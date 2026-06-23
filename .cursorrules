@@ -1,7 +1,7 @@
 # NeuroCode — Agentic VS Code Extension
 # Cursor Rules File v2.0 — AI Constitution for this Project
 # Author: ZMS Digital Solutions — Dhaka, Bangladesh
-# Stack: TypeScript + Node.js Sidecar + React WebView + Ollama/vLLM
+# Stack: TypeScript + Node.js Sidecar + React WebView + OpenAI Gateway / Ollama
 # Acquisition Target: Google / Meta / SpaceX / GitHub
 
 ## PROJECT IDENTITY
@@ -24,11 +24,12 @@ The system has 3 main processes plus 2 background subsystems:
 
 ```
 [VS Code Extension Host]  ←→  [Sidecar Node.js Server :39291]  ←→  [LLM Backend]
-   TypeScript                    CodeGraph                            Ollama / vLLM
-   WebView React UI              ShardManager                        Local or Remote
-   Commands / Keybindings        AgentOrchestrator
-   AttentionOverlay              MultiAgentRunner          ←→  [Edit Genome Collector]
-   GutterHeatmap                 ProjectMemoryGraph               SQLite + opt-in sync
+   TypeScript                    CodeGraph                            OpenAI Gateway / Ollama
+   WebView React UI              ShardManager                        Any /v1-compatible API
+   Commands / Keybindings        AgentOrchestrator                   Embeddings: Ollama only
+   AttentionOverlay              ModelSelector + LLMRouter
+   GutterHeatmap                 MultiAgentRunner          ←→  [Edit Genome Collector]
+                                 ProjectMemoryGraph               SQLite + opt-in sync
                                  SemanticDriftDetector
                                  CausalDebugAgent
                                  CrossRepoIndexer
@@ -38,7 +39,7 @@ The system has 3 main processes plus 2 background subsystems:
 
 ### Process 1: Extension Host (TypeScript)
 - Registers commands, keybindings, sidebar, gutter decorations
-- Hosts React WebView panels: Chat, Tasks, Shards, Memory, Debug, Review
+- Hosts React WebView panels: Chat, Analytics, Tasks, Shards, Memory, Drift, Genome, Debug, Review
 - Communicates with Sidecar via HTTP on localhost:39291
 - Renders AttentionHeatmap overlay directly in editor gutter
 - Reads/writes files via VS Code API only (never fs directly)
@@ -55,10 +56,14 @@ The system has 3 main processes plus 2 background subsystems:
 - Exposes REST + SSE API consumed by Extension Host
 
 ### Process 3: LLM Backend (pluggable)
-- Default: Ollama on localhost:11434
-- Remote: vLLM on RunPod (configurable endpoint + API key)
-- Interface: OpenAI-compatible /v1/chat/completions endpoint
-- All adapters speak the same internal LLMAdapter interface
+- **Gateway mode (default):** any OpenAI-compatible `/v1/chat/completions` endpoint via `OpenAICompatibleAdapter`
+  - LiteLLM, vLLM, RunPod proxy, OpenAI, custom corporate gateway
+  - Config: `neurocode.llm.apiBaseUrl`, `apiKey`, `model`
+- **Ollama mode:** local `OllamaAdapter` when `neurocode.llm.mode = ollama`
+- **Fallback:** optional `fallbackToOllama` when gateway unreachable
+- **Embeddings:** always Ollama (`nomic-embed-text`) — never via gateway
+- **Model selection:** `ModelSelector` — Auto picks model per task; Manual uses `selectedModel` from `GET /v1/models`
+- All adapters implement the same `LLMAdapter` interface (`chat`, `stream`, `listModels`, `isAvailable`)
 
 ---
 
@@ -279,7 +284,7 @@ neurocode/
 ### Air-Gap Mode Rules
 - When neurocode.airgap.enabled = true:
   - All outbound HTTP blocked by AirGapModeManager (throws on any external call)
-  - Only OllamaAdapter allowed (no VLLMAdapter unless vllmUrl is LAN address)
+  - Only OllamaAdapter allowed for LLM (no gateway unless apiBaseUrl is LAN address)
   - Edit Genome sync disabled
   - Cross-repo indexer limited to local filesystem paths only
   - Status bar shows: "$(shield) NeuroCode [AIR-GAP]"
@@ -373,6 +378,16 @@ GET  /genome/stats    → { totalEdits, acceptRate, topFiles, avgLatency }
 POST /genome/export   → triggers local export to .neurocode/genome/export-{date}.jsonl
 ```
 
+### NEW: LLM Models
+```
+GET /llm/models
+Response: { models: [{ id, owned_by? }] }
+
+POST /llm/resolve
+Request:  { modelSelection, selectedModel, intent, chatMode }
+Response: { modelId, reason }
+```
+
 ### NEW: Cross-Repo
 ```
 POST /crossrepo/register  { projectPath, projectId, projectName }
@@ -387,12 +402,21 @@ POST /crossrepo/search    { query, topK, excludeProjectId? }
 
 ```json
 {
-  "neurocode.llm.provider":                { "enum": ["ollama","vllm","openai"], "default": "ollama" },
+  "neurocode.llm.mode":                    { "enum": ["gateway","ollama"], "default": "gateway" },
+  "neurocode.llm.apiBaseUrl":              { "default": "" },
+  "neurocode.llm.apiKey":                  { "default": "" },
+  "neurocode.llm.model":                   { "default": "qwen2.5-coder:7b" },
+  "neurocode.llm.gatewayLabel":            { "default": "" },
+  "neurocode.llm.modelSelection":          { "enum": ["auto","manual"], "default": "auto" },
+  "neurocode.llm.selectedModel":           { "default": "" },
   "neurocode.llm.ollamaUrl":               { "default": "http://localhost:11434" },
   "neurocode.llm.ollamaModel":             { "default": "qwen2.5-coder:7b" },
-  "neurocode.llm.vllmUrl":                 { "default": "" },
-  "neurocode.llm.vllmApiKey":              { "default": "" },
-  "neurocode.llm.vllmModel":               { "default": "Qwen/Qwen2.5-Coder-7B-Instruct" },
+  "neurocode.llm.fallbackToOllama":        { "type": "boolean", "default": false },
+  "neurocode.llm.provider":                { "deprecated": true, "description": "Use mode" },
+  "neurocode.llm.vllmUrl":                 { "deprecated": true, "description": "Use apiBaseUrl" },
+  "neurocode.llm.vllmApiKey":              { "deprecated": true, "description": "Use apiKey" },
+  "neurocode.llm.vllmModel":               { "deprecated": true, "description": "Use model" },
+  "neurocode.chat.maxAttachments":         { "default": 5 },
   "neurocode.shard.maxTokens":             { "default": 3500, "minimum": 1000, "maximum": 6000 },
   "neurocode.shard.maxFiles":              { "default": 8 },
   "neurocode.indexing.excludePatterns":    { "default": ["node_modules",".git","dist","build",".next"] },

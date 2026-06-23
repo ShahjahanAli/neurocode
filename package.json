@@ -1,7 +1,7 @@
 {
   "name": "neurocode",
   "displayName": "NeuroCode",
-  "description": "VS Code extension for agentic coding with local Ollama and cloud RunPod vLLM — smart context shards, multi-agent review, and a full agent loop on modest hardware.",
+  "description": "VS Code extension for agentic coding with OpenAI-compatible LLM gateways and local Ollama — smart context shards, multi-agent review, and a full agent loop on modest hardware.",
   "version": "0.1.0",
   "publisher": "zms-digital",
   "license": "MIT",
@@ -216,59 +216,99 @@
     "configuration": {
       "title": "NeuroCode",
       "properties": {
-        "neurocode.llm.provider": {
+        "neurocode.llm.mode": {
           "type": "string",
-          "enum": ["ollama", "vllm", "openai"],
-          "default": "vllm",
-          "description": "Primary LLM provider. vLLM uses RunPod; falls back to Ollama when unavailable."
+          "enum": ["gateway", "ollama"],
+          "default": "gateway",
+          "description": "gateway = any OpenAI-compatible API (LiteLLM, vLLM, RunPod proxy, OpenAI). ollama = local Ollama only."
+        },
+        "neurocode.llm.apiBaseUrl": {
+          "type": "string",
+          "default": "",
+          "description": "OpenAI-compatible API base URL with /v1 suffix (your AI gateway, LiteLLM, vLLM, etc.)"
+        },
+        "neurocode.llm.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Bearer token for the LLM gateway (if required)"
+        },
+        "neurocode.llm.model": {
+          "type": "string",
+          "default": "qwen2.5-coder:7b",
+          "description": "Model id passed to the gateway (gateway routes to the actual backend)"
+        },
+        "neurocode.llm.gatewayLabel": {
+          "type": "string",
+          "default": "LLM gateway",
+          "description": "Optional display name for your gateway in logs"
+        },
+        "neurocode.llm.modelSelection": {
+          "type": "string",
+          "enum": ["auto", "manual"],
+          "default": "auto",
+          "description": "Auto picks the best model per request; manual uses neurocode.llm.selectedModel"
+        },
+        "neurocode.llm.selectedModel": {
+          "type": "string",
+          "default": "",
+          "description": "Model id when modelSelection is manual (also selectable in Chat UI)"
         },
         "neurocode.llm.ollamaUrl": {
           "type": "string",
-          "default": "http://localhost:11434"
+          "default": "http://localhost:11434",
+          "description": "Local Ollama URL (ollama mode, embeddings, and optional fallback)"
         },
         "neurocode.llm.ollamaModel": {
           "type": "string",
           "default": "qwen2.5-coder:7b"
         },
+        "neurocode.llm.fallbackToOllama": {
+          "type": "boolean",
+          "default": false,
+          "description": "When gateway mode is unreachable, fall back to local Ollama instead of failing."
+        },
+        "neurocode.llm.provider": {
+          "type": "string",
+          "enum": ["ollama", "vllm", "openai"],
+          "default": "vllm",
+          "description": "Deprecated — use neurocode.llm.mode. Legacy values map to gateway except ollama."
+        },
         "neurocode.llm.vllmUrl": {
           "type": "string",
           "default": "",
-          "description": "RunPod vLLM proxy URL with /v1 suffix"
+          "description": "Deprecated — use neurocode.llm.apiBaseUrl"
         },
         "neurocode.llm.vllmApiKey": {
           "type": "string",
           "default": "",
-          "description": "RunPod API key"
+          "description": "Deprecated — use neurocode.llm.apiKey"
         },
         "neurocode.llm.vllmModel": {
           "type": "string",
-          "default": "Qwen/Qwen2.5-Coder-32B-Instruct-AWQ"
+          "default": "",
+          "description": "Deprecated — use neurocode.llm.model"
         },
         "neurocode.llm.openaiUrl": {
           "type": "string",
-          "default": "https://api.openai.com/v1",
-          "description": "OpenAI-compatible API base URL with /v1 suffix"
+          "default": "",
+          "description": "Deprecated — use neurocode.llm.apiBaseUrl"
         },
         "neurocode.llm.openaiApiKey": {
           "type": "string",
           "default": "",
-          "description": "OpenAI API key (or compatible provider)"
+          "description": "Deprecated — use neurocode.llm.apiKey"
         },
         "neurocode.llm.openaiModel": {
           "type": "string",
-          "default": "gpt-4o-mini"
-        },
-        "neurocode.llm.fallbackToOllama": {
-          "type": "boolean",
-          "default": false,
-          "description": "When false and provider is vllm, fail instead of falling back to local Ollama."
+          "default": "",
+          "description": "Deprecated — use neurocode.llm.model"
         },
         "neurocode.shard.maxTokens": {
           "type": "number",
           "default": 0,
           "minimum": 0,
           "maximum": 6000,
-          "description": "Shard token budget. 0 = auto (6000 RunPod / 3500 Ollama)."
+          "description": "Shard token budget. 0 = auto (6000 gateway / 3500 Ollama)."
         },
         "neurocode.shard.maxFiles": {
           "type": "number",
@@ -290,7 +330,7 @@
         "neurocode.runpod.apiKey": {
           "type": "string",
           "default": "",
-          "description": "RunPod API key for pod lifecycle management"
+          "description": "Optional RunPod pod lifecycle (start/stop GPU pod). Independent of neurocode.llm.apiBaseUrl."
         },
         "neurocode.runpod.podId": {
           "type": "string",

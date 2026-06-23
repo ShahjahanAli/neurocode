@@ -224,7 +224,7 @@ async function maybeAutoStartPod(sidecar: SidecarManager): Promise<void> {
 			if (state === 'warm' || state === 'running') {
 				clearInterval(poll);
 				void vscode.window.showInformationMessage(
-					'NeuroCode: RunPod L4 ready! Qwen3-Coder loaded. Budget: 6000 tokens.',
+					'NeuroCode: LLM gateway ready. Budget: 6000 tokens.',
 				);
 			}
 			if (Date.now() > deadline) {
@@ -275,27 +275,27 @@ function updateStatusBar(health: HealthData): void {
 
 	switch (health.podState) {
 		case 'stopped':
-			statusBarItem.text = '$(circle-slash) NeuroCode | RunPod stopped | fallback: Ollama';
+			statusBarItem.text = `$(circle-slash) NeuroCode | GPU pod stopped | ${modelName}`;
 			break;
 		case 'starting':
-			statusBarItem.text = '$(sync~spin) NeuroCode | Starting RunPod L4...';
+			statusBarItem.text = '$(sync~spin) NeuroCode | Starting GPU pod…';
 			break;
 		case 'running':
-			statusBarItem.text = `$(remote-explorer) NeuroCode | Qwen3 on RunPod L4 | ${fileCount} files`;
+			statusBarItem.text = `$(remote-explorer) NeuroCode | ${modelName} | ${fileCount} files`;
 			break;
 		case 'warm':
-			statusBarItem.text = `$(rocket) NeuroCode | Qwen3 warm | ${fileCount} files`;
+			statusBarItem.text = `$(rocket) NeuroCode | ${modelName} warm | ${fileCount} files`;
 			break;
 		case 'stopping':
-			statusBarItem.text = '$(sync~spin) NeuroCode | RunPod stopping...';
+			statusBarItem.text = '$(sync~spin) NeuroCode | Stopping GPU pod…';
+			break;
+		case 'gateway-connected':
+			statusBarItem.text = `$(cloud) NeuroCode | ${modelName} | ${fileCount} files`;
 			break;
 		case 'not-configured':
-			statusBarItem.text = health.provider === 'vllm'
-				? `$(remote-explorer) NeuroCode | ${modelName} | ${fileCount} files`
+			statusBarItem.text = health.provider === 'gateway'
+				? `$(cloud) NeuroCode | ${modelName} | ${fileCount} files`
 				: `$(chip) NeuroCode | ${modelName} | ${fileCount} files`;
-			break;
-		case 'direct-vllm':
-			statusBarItem.text = `$(remote-explorer) NeuroCode | ${modelName} | ${fileCount} files`;
 			break;
 		default:
 			statusBarItem.text = `$(info) NeuroCode | ${modelName} | ${fileCount} files`;

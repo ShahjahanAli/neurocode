@@ -8,6 +8,17 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **OpenAI-compatible LLM gateway** — single `OpenAICompatibleAdapter` for any `/v1/chat/completions` endpoint (LiteLLM, vLLM, RunPod proxy, OpenAI, custom gateway)
+- **LLM config refactor** — `neurocode.llm.mode`, `apiBaseUrl`, `apiKey`, `model`, `gatewayLabel`; legacy `vllmUrl` / `openaiUrl` / `provider` auto-migrate via `resolveLlmConfig()`
+- **Cursor-style model picker** — **Auto** (optimal model per task) or **Manual** from `GET /v1/models`; `ModelSelector.js`, `GET /llm/models`, `POST /llm/resolve`
+- **Chat attachments** — attach current file, editor selection, or browse files; injected as priority-0 shards (`neurocode.chat.maxAttachments`)
+- **Analytics panel** — token usage, latency, thumbs up/down feedback per response
+- **Change review** — Cursor-style Accept / Reject per file, diff editor, Accept All / Reject All
+- **Drift panel** — semantic drift alerts UI wired to `GET /drift/status` and acknowledge
+- **Genome panel** — edit genome stats, consent, and JSONL export in sidebar
+- **FileQueue** — serialized file reads for indexer and shard assembly (I/O storm prevention)
+- **Task queue DAG UI** — improved `TaskNode` visualization in Task Queue panel
+- **LlmConnectionBadge** — replaces RunPod-specific status badge; shows gateway vs Ollama connection
 - **Cursor-like chat UI** on the right **secondary sidebar** (configurable via `neurocode.ui.chatLocation`)
 - **Chat mode toolbar:** Auto, Ask, Plan, Edit, Agent
 - **IntentResolver** — history-aware natural language routing (explain / plan / implement)
@@ -21,10 +32,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
-- Chat orchestration via `ChatOrchestrator.js` with SSE streaming (`POST /agent/chat/stream`)
+- **RunPod is optional** — GPU pod lifecycle (`neurocode.runpod.*`) is independent of LLM routing; gateway URL is primary
+- Chat orchestration via `ChatOrchestrator.js` with SSE streaming (`POST /agent/chat/stream`); `intent` event includes resolved `model`
+- `LLMRouter.js` modes: `gateway` | `ollama`; provider id: `gateway` | `ollama`
 - Plan step execution uses implement prompts (`buildMessagesForIntent('edit')`)
 - Improved diff parsing for unfenced `// path/to/file.ts` headers
-- RunPod vLLM stream errors surfaced with actionable messages
+- Gateway stream errors surfaced with actionable messages
+- Right sidebar tabs: Overview | Chat | Analytics | Tasks | Shards | Review | Memory | Drift | Genome | Debug
 
 ### Fixed
 

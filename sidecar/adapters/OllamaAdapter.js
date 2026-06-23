@@ -82,6 +82,29 @@ export class OllamaAdapter {
 	}
 
 	/**
+	 * Lists locally installed Ollama models.
+	 * @returns {Promise<Array<{ id: string }>>}
+	 */
+	async listModels() {
+		try {
+			const res = await axios.get(`${this.baseUrl}/api/tags`, { timeout: 10_000 });
+			const models = res.data?.models ?? [];
+			return models
+				.map((m) => ({ id: String(m.name ?? '').replace(/:latest$/, '') }))
+				.filter((m) => m.id && !/embed/i.test(m.id));
+		} catch {
+			return this.model ? [{ id: this.model }] : [];
+		}
+	}
+
+	/**
+	 * @param {string} model
+	 */
+	setModel(model) {
+		this.model = model;
+	}
+
+	/**
 	 * @returns {Promise<boolean>}
 	 */
 	async isAvailable() {

@@ -9,7 +9,7 @@ export interface SidecarResponse<T> {
 export interface HealthData {
 	status: string;
 	airgap: boolean;
-	provider: 'vllm' | 'ollama' | null;
+	provider: 'gateway' | 'ollama' | null;
 	model: { name: string; provider: string; gpu: string } | null;
 	tokenBudget: number;
 	podState: string;
@@ -18,7 +18,7 @@ export interface HealthData {
 	fileCount: number;
 }
 
-/** RunPod status from GET /runpod/status. */
+/** RunPod / connection status from GET /runpod/status. */
 export interface RunpodStatus {
 	podState: string;
 	podId?: string;
@@ -27,6 +27,9 @@ export interface RunpodStatus {
 	sessionMinutes?: number;
 	estimatedCostUsd?: number;
 	idleRemainingMs?: number | null;
+	provider?: 'gateway' | 'ollama' | null;
+	model?: string;
+	lifecycleConfigured?: boolean;
 }
 
 /** Index job start response. */
@@ -104,6 +107,8 @@ export interface AgentChatRequest {
 	fixOnCheck?: boolean;
 	maxSteps?: number;
 	attachments?: ChatAttachment[];
+	modelSelection?: 'auto' | 'manual';
+	selectedModel?: string;
 }
 
 /** Unified chat response data. */
@@ -131,6 +136,7 @@ export interface AgentChatStreamChunk {
 	type: 'intent' | 'token' | 'done' | 'error' | 'step' | 'tool_start' | 'tool_result';
 	intent?: ChatIntent;
 	agentic?: boolean;
+	model?: string;
 	mode?: string;
 	step?: number;
 	maxSteps?: number;

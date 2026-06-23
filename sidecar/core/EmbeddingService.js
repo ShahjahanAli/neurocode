@@ -7,7 +7,7 @@ const CACHE_MAX = 100;
 const cache = new Map();
 
 /**
- * Embedding service — always uses local Ollama, never RunPod.
+ * Embedding service — uses local Ollama (independent of chat LLM gateway).
  */
 export class EmbeddingService {
 	/**
