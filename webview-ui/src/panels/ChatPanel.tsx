@@ -1,8 +1,9 @@
 import { ChangeReviewBar, type ChangeReviewSummary } from '../components/ChangeReviewBar';
 import { ChatAttachments, MessageAttachments, type ChatAttachment } from '../components/ChatAttachments';
+import { GenomeConsentBanner } from '../components/GenomeConsentBanner';
+import { LlmConnectionBadge } from '../components/LlmConnectionBadge';
 import { MessageFeedback } from '../components/MessageFeedback';
 import { ModelPicker } from '../components/ModelPicker';
-import { GenomeConsentBanner } from '../components/GenomeConsentBanner';
 import { ShardCard } from '../components/ShardCard';
 import { MessageMarkdown } from '../components/MessageMarkdown';
 import { useVsCodeApi } from '../hooks/useVSCodeApi';
