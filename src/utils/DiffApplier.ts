@@ -41,6 +41,10 @@ export function isAgentToolArtifact(text: string): boolean {
 	if (TOOL_CALL_JSON_RE.test(trimmed)) {
 		return true;
 	}
+	// Catch tool JSON anywhere in the body (truncated writes, nested mistakes).
+	if (/"tool"\s*:\s*"(?:write_file|read_file|search_replace|search_code)"/.test(trimmed)) {
+		return true;
+	}
 	return false;
 }
 
@@ -484,6 +488,11 @@ export async function createOrApplyFile(
 	filename: string,
 	content: string,
 ): Promise<'created' | 'updated' | 'failed'> {
+	if (isAgentToolArtifact(content)) {
+		console.warn(`[DiffApplier] Blocked tool artifact write to ${filename}`);
+		return 'failed';
+	}
+
 	const uri = resolveFileUri(filename, workspaceRoot);
 	if (!uri) {
 		return 'failed';

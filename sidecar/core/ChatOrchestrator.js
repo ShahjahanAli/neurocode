@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
 import { LLMRouter } from './LLMRouter.js';
 import { resolveModelId } from './ModelSelector.js';
-import { getPrimaryReviewShard } from './FileReview.js';
+import { getPrimaryReviewShard, extractStackTracePaths } from './FileReview.js';
 import { resolveUserIntent, resolveIntentPermissions } from './IntentRouter.js';
 import { streamInvestigateLoop } from './InvestigateLoop.js';
 import { streamAgentToolLoop } from './AgentToolLoop.js';
@@ -228,11 +228,23 @@ function shouldUseInvestigateLoop(resolved, chatMode = 'auto') {
  * @param {string | undefined} activeFile
  * @param {string} projectPath
  * @param {import('./services.js').services} services
+ * @param {string} [task] - User message (stack traces / error paths).
  * @returns {string[]}
  */
-function getSeedPathsFromResolution(resolved, activeFile, projectPath, services) {
+function getSeedPathsFromResolution(resolved, activeFile, projectPath, services, task = '') {
 	const paths = [...(resolved.seedPaths ?? [])];
-	if (activeFile && paths.length === 0) {
+
+	for (const loc of extractStackTracePaths(task)) {
+		paths.push(loc.path);
+	}
+
+	const importTraceRe = /\.\/([\w./-]+\.(?:tsx?|jsx?))/gi;
+	let traceMatch;
+	while ((traceMatch = importTraceRe.exec(task)) !== null) {
+		paths.push(traceMatch[1].replace(/\\/g, '/'));
+	}
+
+	if (activeFile) {
 		try {
 			const rel = services.shardManager._rel(activeFile, projectPath);
 			if (rel) {
@@ -242,7 +254,7 @@ function getSeedPathsFromResolution(resolved, activeFile, projectPath, services)
 			// ignore
 		}
 	}
-	return [...new Set(paths.map((p) => p.replace(/\\/g, '/')))].slice(0, 6);
+	return [...new Set(paths.map((p) => p.replace(/\\/g, '/').replace(/^\.\//, '')))].slice(0, 6);
 }
 
 /**
@@ -336,7 +348,7 @@ export async function runOrchestratedChat(services, params) {
 	}, routerAdapter);
 
 	const execution = pickExecutionPath(resolved, chatMode);
-	const seedPaths = getSeedPathsFromResolution(resolved, activeFile, projectPath, services);
+	const seedPaths = getSeedPathsFromResolution(resolved, activeFile, projectPath, services, task);
 
 	console.log(
 		`[ChatOrchestrator] llm-route mode=${chatMode} execution=${execution} intent=${resolved.intent} writes=${resolved.allowWrites} seeds=${seedPaths.join(',') || 'none'} reason=${resolved.reason}`,
@@ -527,7 +539,7 @@ export async function streamOrchestratedChat(services, params, write) {
 		}, routerAdapter);
 
 		const execution = pickExecutionPath(resolved, chatMode);
-		const seedPaths = getSeedPathsFromResolution(resolved, activeFile, projectPath, services);
+		const seedPaths = getSeedPathsFromResolution(resolved, activeFile, projectPath, services, task);
 
 		console.log(
 			`[ChatOrchestrator] llm-route mode=${chatMode} execution=${execution} intent=${resolved.intent} writes=${resolved.allowWrites} seeds=${seedPaths.join(',') || 'none'} reason=${resolved.reason}`,

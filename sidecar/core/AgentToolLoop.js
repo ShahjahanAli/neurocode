@@ -41,31 +41,39 @@ Available tools:
  * @returns {{ tool: string, args: Record<string, unknown> } | null}
  */
 export function parseToolCall(response) {
+	/** @type {Array<{ raw: string, fenced: boolean }>} */
 	const candidates = [];
 
 	const fencedClosed = response.match(/```neurocode-tool\s*\n([\s\S]*?)```/i)
 		?? response.match(/```json\s*\n([\s\S]*?)```/i);
 	if (fencedClosed?.[1]) {
-		candidates.push(fencedClosed[1].trim());
+		candidates.push({ raw: fencedClosed[1].trim(), fenced: true });
 	}
 
 	const fencedOpen = response.match(/```neurocode-tool\s*\n([\s\S]+)$/i);
-	if (fencedOpen?.[1]) {
-		candidates.push(fencedOpen[1].trim().replace(/```\s*$/i, '').trim());
+	if (fencedOpen?.[1] && !fencedClosed) {
+		candidates.push({
+			raw: fencedOpen[1].trim().replace(/```\s*$/i, '').trim(),
+			fenced: false,
+		});
 	}
 
-	const inlineRe = /\{\s*"tool"\s*:\s*"(read_file|search_code|write_file|search_replace|reply)"[\s\S]*?\}/g;
+	const inlineRe = /\{\s*"tool"\s*:\s*"(read_file|search_code|reply)"[\s\S]*?\}/g;
 	let inlineMatch;
 	while ((inlineMatch = inlineRe.exec(response)) !== null) {
-		candidates.push(inlineMatch[0]);
+		candidates.push({ raw: inlineMatch[0], fenced: true });
 	}
 
-	for (const raw of candidates) {
+	for (const { raw, fenced } of candidates) {
 		try {
 			const parsed = JSON.parse(raw);
-			if (parsed?.tool && AGENT_TOOL_NAMES.includes(parsed.tool)) {
-				return { tool: parsed.tool, args: parsed.args ?? {} };
+			if (!parsed?.tool || !AGENT_TOOL_NAMES.includes(parsed.tool)) {
+				continue;
 			}
+			if ((parsed.tool === 'write_file' || parsed.tool === 'search_replace') && !fenced) {
+				continue;
+			}
+			return { tool: parsed.tool, args: parsed.args ?? {} };
 		} catch {
 			// try next
 		}
@@ -116,7 +124,54 @@ function compactHistoryContent(content, maxLen = 500) {
  */
 function compactAssistantTurn(tool, toolCall) {
 	const path = toolCall.args?.path ? String(toolCall.args.path) : '';
-	return path ? `[Called ${tool}: ${path}]` : `[Called ${tool}]`;
+	return path ? `⟪${tool}:${path}⟫` : `⟪${tool}⟫`;
+}
+
+/**
+ * @param {string} text
+ * @returns {boolean}
+ */
+function isInternalAgentEcho(text) {
+	const t = String(text ?? '').trim();
+	return /^\[Called\s+\w+:/.test(t)
+		|| /^⟪\w+/.test(t)
+		|| /^\(read_file:|^\(write_file:|^\(search_replace:/.test(t);
+}
+
+/**
+ * @param {string} content
+ * @returns {boolean}
+ */
+function isCorruptedSource(content) {
+	return /^\s*\{\s*"tool"\s*:\s*"(?:write_file|read_file)/.test(String(content ?? '').trim());
+}
+
+/**
+ * @param {Array<{ tool: string, args?: Record<string, unknown>, result?: Record<string, unknown> }>} toolLog
+ * @param {Array<{ path: string }>} pendingWrites
+ * @returns {string}
+ */
+function buildAgentSummary(toolLog, pendingWrites) {
+	const lines = [];
+	for (const entry of toolLog) {
+		const path = entry.args?.path ? String(entry.args.path) : '';
+		if (entry.tool === 'read_file') {
+			const corrupt = entry.result?.corrupted ? ' ⚠️ corrupted' : '';
+			lines.push(`- Read \`${path || '?'}\`${corrupt}`);
+		} else if (entry.tool === 'write_file' || entry.tool === 'search_replace') {
+			const ok = entry.result?.success ? '' : ' _(failed)_';
+			lines.push(`- ${entry.tool} \`${path}\`${ok}`);
+		} else if (entry.tool === 'reply') {
+			lines.push('- Replied');
+		}
+	}
+	if (pendingWrites.length > 0) {
+		lines.push('', '**Staged changes:**', ...pendingWrites.map((w) => `- \`${w.path}\``));
+	}
+	if (lines.length === 0) {
+		return 'Agent stopped before completing the task. Paste the error again or say **continue**.';
+	}
+	return `**Agent progress:**\n${lines.join('\n')}\n\n_Did not finish — say **continue** to resume fixing._`;
 }
 
 /**
@@ -128,6 +183,14 @@ function compactAssistantTurn(tool, toolCall) {
 function formatToolResultMessage(tool, toolCall, result) {
 	if (tool === 'read_file' && result.success && typeof result.content === 'string') {
 		const rel = String(result.path ?? toolCall.args?.path ?? '?');
+		if (isCorruptedSource(result.content)) {
+			return `⚠️ \`${rel}\` is **corrupted** — it contains agent tool JSON, not valid source code. `
+				+ `Read \`app/page.tsx\` for the correct import, then use **write_file** to restore valid TSX `
+				+ `(or **search_replace** if you know the exact broken line). `
+				+ `Do NOT leave tool-call JSON in the file.\n\n`
+				+ `Corrupt preview:\n\`\`\`\n${result.content.slice(0, 200)}\n\`\`\`\n\n`
+				+ `Fix this file next, then reply.`;
+		}
 		const body = result.content.slice(0, AGENT_READ_PREVIEW_CHARS);
 		const suffix = result.truncated || result.content.length > AGENT_READ_PREVIEW_CHARS
 			? ` (showing ${body.length}/${result.content.length} chars)`
@@ -374,11 +437,13 @@ export async function streamAgentToolLoop(services, params, write) {
 			const toolCall = parseToolCall(response);
 
 			if (!toolCall) {
-				if (isToolArtifact(response)) {
-					messages.push({ role: 'assistant', content: '[Invalid tool format]' });
+				if (isToolArtifact(response) || isInternalAgentEcho(response)) {
+					messages.push({ role: 'assistant', content: '⟪invalid-echo⟫' });
 					messages.push({
 						role: 'user',
-						content: 'Respond with exactly one ```neurocode-tool``` block containing valid JSON for a single tool call.',
+						content: isInternalAgentEcho(response)
+							? 'Do not echo internal tool labels. Call the next tool: read corrupted files, search_replace or write_file to fix, then reply.'
+							: 'Respond with exactly one ```neurocode-tool``` block containing valid JSON for a single tool call.',
 					});
 					continue;
 				}
@@ -418,10 +483,30 @@ export async function streamAgentToolLoop(services, params, write) {
 			}
 
 			const result = await executeAgentTool(toolCall.tool, toolCall.args, toolCtx);
+			if (toolCall.tool === 'read_file' && result.success && isCorruptedSource(result.content)) {
+				result.corrupted = true;
+			}
 			const summary = summarizeToolResult(result);
 
 			write({ type: 'tool_result', tool: toolCall.tool, result: sanitizeForJson(summary) });
 			toolLog.push({ tool: toolCall.tool, args: toolCall.args, result: summary });
+
+			const pathLabel = toolCall.args?.path ? String(toolCall.args.path) : '';
+			if (toolCall.tool === 'read_file' && pathLabel) {
+				write({
+					type: 'status',
+					content: result.corrupted
+						? `_Read \`${pathLabel}\` — ⚠️ file is corrupted, needs restore_`
+						: `_Read \`${pathLabel}\` (${String(result.content ?? '').length} chars)_`,
+				});
+			} else if ((toolCall.tool === 'write_file' || toolCall.tool === 'search_replace') && pathLabel) {
+				write({
+					type: 'status',
+					content: result.success
+						? `_Staged \`${pathLabel}\`_`
+						: `_Failed to edit \`${pathLabel}\`_`,
+				});
+			}
 
 			if (
 				(toolCall.tool === 'write_file' || toolCall.tool === 'search_replace')
@@ -446,10 +531,8 @@ export async function streamAgentToolLoop(services, params, write) {
 			finalReply = `Agent completed ${pendingWrites.length} file change(s):\n${pendingWrites.map((w) => `- \`${w.path}\``).join('\n')}`;
 			displayReply = finalReply;
 		} else if (!finalReply) {
-			finalReply = isToolArtifact(streamedText)
-				? 'Agent finished without a final reply.'
-				: (streamedText.trim() || 'Agent finished without a final reply.');
-			displayReply = cleanDisplayReply(finalReply);
+			finalReply = buildAgentSummary(toolLog, pendingWrites);
+			displayReply = finalReply;
 		}
 
 		if (!displayReply) {

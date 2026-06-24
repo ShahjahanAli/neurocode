@@ -653,6 +653,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
 		const applied = await this.applyPendingWrites(data.pendingWrites, folder.uri.fsPath);
 		if (applied.length === 0) {
+			if (data.pendingWrites.some((w) => isAgentToolArtifact(w.content))) {
+				void vscode.window.showWarningMessage(
+					'NeuroCode: Blocked invalid agent write (tool JSON in file content). '
+					+ 'Restore corrupted files: git checkout -- path/to/file.tsx',
+				);
+			}
 			return data;
 		}
 
@@ -877,6 +883,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 						round: 1,
 						message: `Tool: ${chunk.tool}…`,
 					});
+				}
+				if (chunk.type === 'status' && chunk.content) {
+					this.post({ type: 'streamSetText', text: chunk.content });
+				}
+				if (chunk.type === 'stream_set' && chunk.text) {
+					this.post({ type: 'streamSetText', text: chunk.text });
 				}
 				if (chunk.type === 'token' && chunk.content) {
 					this.post({ type: 'streamToken', content: chunk.content });

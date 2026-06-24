@@ -15,7 +15,8 @@ function isInvalidWriteContent(content) {
 	if (/```neurocode-tool/i.test(trimmed)) {
 		return true;
 	}
-	return /^\s*\{\s*"tool"\s*:\s*"(?:read_file|search_code|write_file|search_replace|reply)"/.test(trimmed);
+	return /^\s*\{\s*"tool"\s*:\s*"(?:read_file|search_code|write_file|search_replace|reply)"/.test(trimmed)
+		|| /"tool"\s*:\s*"(?:write_file|read_file|search_replace)"/.test(trimmed);
 }
 
 /**
