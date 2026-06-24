@@ -29,10 +29,14 @@ export function sanitizeForJson(value, seen = new WeakSet()) {
 		return value.map((item) => sanitizeForJson(item, seen));
 	}
 
+	const SKIP_KEYS = new Set([
+		'socket', 'parser', '_httpMessage', 'req', 'res', 'request', 'config', 'agent', '_events',
+	]);
+
 	/** @type {Record<string, unknown>} */
 	const out = {};
 	for (const [key, nested] of Object.entries(value)) {
-		if (key === 'socket' || key === 'parser' || key === '_httpMessage' || key === 'req' || key === 'res') {
+		if (SKIP_KEYS.has(key)) {
 			continue;
 		}
 		const cleaned = sanitizeForJson(nested, seen);

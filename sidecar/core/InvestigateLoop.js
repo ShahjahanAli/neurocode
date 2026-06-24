@@ -4,6 +4,7 @@ import { trimHistory } from './ChatOrchestrator.js';
 import { recordAnalyticsEvent } from './AnalyticsCollector.js';
 import { executeAgentTool } from './AgentTools.js';
 import { parseToolCall } from './AgentToolLoop.js';
+import { sanitizeForJson } from '../utils/safeJson.js';
 
 const INVESTIGATE_TOOLS = ['read_file', 'search_code', 'reply'];
 
@@ -309,8 +310,12 @@ export async function streamInvestigateLoop(services, params, write) {
 			const result = await executeAgentTool(toolCall.tool, toolCall.args, toolCtx);
 			const summary = summarizeToolResult(result);
 
-			write({ type: 'tool_result', tool: toolCall.tool, result: summary });
-			toolLog.push({ tool: toolCall.tool, args: toolCall.args, result: summary });
+			write({ type: 'tool_result', tool: toolCall.tool, result: sanitizeForJson(summary) });
+			toolLog.push({
+				tool: toolCall.tool,
+				args: toolCall.args,
+				result: sanitizeForJson(summary),
+			});
 
 			messages.push({ role: 'assistant', content: response });
 			messages.push({
