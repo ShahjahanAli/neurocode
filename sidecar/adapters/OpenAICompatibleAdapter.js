@@ -2,12 +2,47 @@ import axios from 'axios';
 import { safeJsonPreview } from '../utils/safeJson.js';
 
 /**
+ * @param {unknown} data
+ * @returns {Promise<string | null>}
+ */
+async function readStreamErrorBody(data) {
+	if (!data || typeof data !== 'object' || typeof data.pipe !== 'function') {
+		return null;
+	}
+	const chunks = [];
+	try {
+		for await (const chunk of data) {
+			chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+			if (chunks.reduce((n, c) => n + c.length, 0) > 4096) {
+				break;
+			}
+		}
+	} catch {
+		return null;
+	}
+	const text = Buffer.concat(chunks).toString('utf8').trim();
+	if (!text) {
+		return null;
+	}
+	try {
+		const parsed = JSON.parse(text);
+		return String(parsed?.error?.message ?? parsed?.message ?? text);
+	} catch {
+		return text;
+	}
+}
+
+/**
  * @param {unknown} err
+ * @param {string} [streamDetail]
  * @returns {string}
  */
-function formatAxiosError(err) {
+function formatAxiosError(err, streamDetail = '') {
 	if (!axios.isAxiosError(err)) {
 		return err instanceof Error ? err.message : String(err);
+	}
+	if (streamDetail) {
+		return streamDetail.slice(0, 400);
 	}
 	if (err.code === 'ECONNABORTED') {
 		return 'request timed out';
@@ -18,18 +53,50 @@ function formatAxiosError(err) {
 	const status = err.response?.status ?? 'network';
 	const data = err.response?.data;
 	if (typeof data === 'string') {
-		return data.slice(0, 300);
+		return data.slice(0, 400);
 	}
 	if (data && typeof data === 'object' && typeof data.pipe === 'function') {
+		if (status === 402) {
+			return 'insufficient credits or billing required on your LLM gateway';
+		}
 		return `HTTP ${status} (stream response)`;
 	}
 	if (data?.error?.message) {
-		return String(data.error.message).slice(0, 300);
+		return String(data.error.message).slice(0, 400);
 	}
 	if (data && typeof data === 'object') {
-		return safeJsonPreview(data, 300);
+		return safeJsonPreview(data, 400);
 	}
 	return `HTTP ${status}`;
+}
+
+/**
+ * @param {import('axios').AxiosError} err
+ * @param {'chat' | 'stream'} kind
+ * @param {string} model
+ * @param {string} [streamDetail]
+ * @returns {Error}
+ */
+function toGatewayError(err, kind, model, streamDetail = '') {
+	const status = err.response?.status ?? 'network';
+	const detail = formatAxiosError(err, streamDetail);
+	if (status === 401) {
+		return new Error('LLM API key rejected — check neurocode.llm.apiKey');
+	}
+	if (status === 402) {
+		return new Error(
+			`LLM gateway payment required (402)${detail ? `: ${detail}` : ''}. `
+			+ 'Add credits or fix billing on your gateway (e.g. OpenRouter dashboard).',
+		);
+	}
+	if (status === 404) {
+		return new Error(`Model not found on gateway: ${model}`);
+	}
+	if (err.code === 'ECONNABORTED') {
+		return new Error('LLM gateway request timed out — try again or reduce context size');
+	}
+	const prefix = kind === 'stream' ? 'LLM gateway stream failed' : 'LLM gateway request failed';
+	return new Error(`${prefix} (${status}): ${detail}`);
 }
 
 /**
@@ -80,13 +147,7 @@ export class OpenAICompatibleAdapter {
 			})();
 		} catch (err) {
 			if (axios.isAxiosError(err)) {
-				if (err.response?.status === 401) {
-					throw new Error('LLM API key rejected — check neurocode.llm.apiKey');
-				}
-				if (err.response?.status === 404) {
-					throw new Error(`Model not found on gateway: ${this.model}`);
-				}
-				throw new Error(`LLM gateway request failed (${err.response?.status ?? 'network'}): ${formatAxiosError(err)}`);
+				throw toGatewayError(err, 'chat', this.model);
 			}
 			throw err;
 		}
@@ -114,13 +175,8 @@ export class OpenAICompatibleAdapter {
 			);
 		} catch (err) {
 			if (axios.isAxiosError(err)) {
-				if (err.response?.status === 401) {
-					throw new Error('LLM API key rejected — check neurocode.llm.apiKey');
-				}
-				if (err.code === 'ECONNABORTED') {
-					throw new Error('LLM gateway request timed out — try again or reduce context size');
-				}
-				throw new Error(`LLM gateway stream failed (${err.response?.status ?? 'network'}): ${formatAxiosError(err)}`);
+				const streamDetail = await readStreamErrorBody(err.response?.data);
+				throw toGatewayError(err, 'stream', this.model, streamDetail ?? '');
 			}
 			throw err;
 		}
