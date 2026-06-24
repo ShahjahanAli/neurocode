@@ -1,4 +1,4 @@
-# NeuroCode — Quick Reference Card v3.2
+# NeuroCode — Quick Reference Card v3.3
 ## Primary: OpenAI-compatible gateway | Local: Ollama | Optional: RunPod pod lifecycle
 
 ---
@@ -37,20 +37,35 @@ Max: `neurocode.chat.maxAttachments` (default 5). Priority 0 in shard assembly.
 
 | Mode | Sidecar behavior | Writes files? |
 |---|---|---|
-| **Auto** | `IntentResolver` + context (history, incomplete file) | If routed to edit |
-| **Ask** | Explain / review prompts | No |
+| **Auto** | LLM `IntentRouter` → `AgentToolLoop`; `seed_paths` from errors/stack traces | If router allows writes |
+| **Ask** | Investigate loop (read-only: `read_file`, `search_code`, `reply`) | No |
 | **Plan** | JSON plan → SQLite `plans` / `plan_steps` | No |
 | **Edit** | Implement prompt + optional auto-continue | Yes if `autoApply` |
-| **Agent** | `AgentToolLoop` tool calls (max `agentToolMaxSteps`) | Yes if `autoApply` |
+| **Agent** | `AgentToolLoop` (session-state prompts, max `agentToolMaxSteps`) | Yes if `autoApply` |
+
+### Agent session state (token-efficient loop)
+
+Each agent step **rebuilds** the LLM prompt from sidecar state — it does **not** append full chat history.
+
+| In session (sidecar) | In LLM prompt (per step) |
+|---|---|
+| Full file bodies after `read_file` | Task + session log (≤8 lines) |
+| Tool log, pending writes | ≤3 file previews (~1.2k chars each) |
+| Corruption flags | One-line nudge from last tool |
+
+Target input: **~2–4k tokens per step** (flat), not linear growth.
 
 ### Agent tools (fenced `neurocode-tool` JSON block)
 
-| Tool | Args | Runs on |
+| Tool | Args | Notes |
 |---|---|---|
-| `read_file` | `path`, `max_chars?` | Sidecar (disk) |
-| `search_code` | `query`, `limit?` | Sidecar (vector + SQLite) |
-| `write_file` | `path`, `content` | Staged → extension applies |
+| `read_file` | `path`, `max_chars?` (default 6000) | Updates session file cache |
+| `search_code` | `query`, `limit?` | Vector + SQLite path match |
+| `search_replace` | `path`, `old_text`, `new_text` | **Preferred** for small fixes |
+| `write_file` | `path`, `content` | Full file only; must be complete fenced JSON |
 | `reply` | `message` | Terminal — ends loop |
+
+**Write safety:** Tool JSON is rejected by sidecar staging and extension `applyPendingWrites`. Agent `mode: tool-loop` skips markdown `parseCodeBlocks` auto-apply.
 
 ### Chat settings (defaults)
 
@@ -58,6 +73,7 @@ Max: `neurocode.chat.maxAttachments` (default 5). Priority 0 in shard assembly.
 |---|---|
 | `neurocode.ui.chatLocation` | `right` |
 | `neurocode.chat.mode` | `auto` |
+| `neurocode.chat.intentRouter` | `llm` |
 | `neurocode.chat.autoApply` | `true` |
 | `neurocode.chat.autoContinue` | `true` |
 | `neurocode.chat.maxContinueRounds` | `8` |
@@ -67,14 +83,15 @@ Max: `neurocode.chat.maxAttachments` (default 5). Priority 0 in shard assembly.
 | `neurocode.chat.maxAttachments` | `5` |
 | `neurocode.llm.mode` | `gateway` |
 | `neurocode.llm.modelSelection` | `auto` |
+| `neurocode.llm.maxOutputTokens` | `2048` (use `4096` for large `write_file`) |
 | `neurocode.indexing.autoIndex` | `true` |
 
-### Intent routing (`IntentResolver.js`)
+### Intent routing (`IntentRouter.js`)
 
-- Scores explain / plan / edit from natural language
-- Conversation follow-ups: `yes`, `go ahead`, `option 2` (not `thanks`)
-- Incomplete file + check → auto implement (`fixOnCheck`)
-- Social acks (`thanks`, `got it`) → always Ask
+- **Auto + `intentRouter: llm`** — LLM returns `intent`, `allow_writes`, `seed_paths` (default)
+- Pasted runtime errors → `edit` + writes + paths from stack trace
+- **Ask pill** → read-only investigate loop (never `write_file`)
+- `hybrid` / `heuristic` — debug/fallback only
 
 ---
 
@@ -121,6 +138,9 @@ LlmConnectionBadge.tsx          ProjectMemoryGraph.js    ──►     nomic-emb
 | Sidecar port | 39291 (127.0.0.1 only) |
 | Max plan steps | 8 |
 | Max implement output tokens | up to 4000 (gateway budget − 500) |
+| Default `maxOutputTokens` | **2048** (`neurocode.llm.maxOutputTokens`) |
+| Agent step output cap | `getAgentOutputTokens()` — min 2048, max 8000 |
+| Agent prompt target (input) | **~2–4k** per step (session rebuild) |
 | Max agent tool steps | 10 (`agentToolMaxSteps`) |
 | Auto-continue rounds | 8 (`maxContinueRounds`) |
 | Collapse code blocks at | 5+ lines |

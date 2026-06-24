@@ -1,4 +1,4 @@
-# NeuroCode — Build Blueprint v3.2
+# NeuroCode — Build Blueprint v3.3
 ## VS Code Extension · Agentic Coding · OpenAI-Compatible Gateway + Ollama
 ## Built for Acquisition: Google / Meta / SpaceX / GitHub
 
@@ -21,7 +21,7 @@ or optional fallback. **RunPod** pod start/stop/warmup is optional and separate 
 
 ---
 
-## Current Architecture (v3.2) — supersedes RunPod-centric steps below
+## Current Architecture (v3.3) — supersedes RunPod-centric steps below
 
 ### LLM routing
 
@@ -79,37 +79,51 @@ Overview | Chat | Analytics | Tasks | Shards | Review | Memory | **Drift** | **G
 
 ---
 
-## Chat & Agent System (v3.2)
+## Chat & Agent System (v3.3)
 
-NeuroCode chat is **Cursor-aligned**: natural language in, routed behavior out.
+NeuroCode chat is **Cursor-aligned** for UX but **shard-orchestrated** for context: natural language in, routed behavior out, bounded tokens per step.
 
 ### Architecture
 
 ```
 User message + mode pill + model picker + attachments
     → Extension: ChatPanel (SSE client)
-    → Sidecar: assembleContext (shards, attachments priority 0)
-    → IntentResolver (Auto) OR forced mode
+    → Sidecar: LLM IntentRouter (Auto) OR forced mode pill
     → ModelSelector (auto/manual) → bindAdapterForRequest
     → Branch:
-        Ask/Edit/Plan → ChatOrchestrator (single or continued stream)
-        Agent         → AgentToolLoop (multi-step tools)
-    → Extension: auto-apply pending writes (vscode.workspace.fs)
+        Ask           → InvestigateLoop (read-only tools)
+        Plan          → ChatOrchestrator plan stream
+        Edit          → ChatOrchestrator implement stream (+ auto-continue)
+        Auto / Agent  → AgentToolLoop (session-state prompts)
+    → Extension: apply pendingWrites only for tool-loop (not markdown parse)
 ```
+
+### Agent session state (critical for token budget)
+
+`AgentToolLoop` does **not** grow `messages[]` with full file bodies each step.
+
+| Component | Role |
+|-----------|------|
+| `createAgentSession(task)` | Holds task, step log, file cache, nudge |
+| `recordFileInSession` | Stores read content; max 3 files in prompt |
+| `rebuildAgentMessages(session)` | Fixed-size user message each LLM call |
+| `formatToolNudge` | One-line feedback after each tool (not 2.5k read bodies) |
+
+Full file content stays in the sidecar session; the LLM sees **previews** (~1.2k chars × 3 files) plus an 8-line session log.
 
 ### Key modules
 
 | File | Role |
 |------|------|
-| `sidecar/core/IntentResolver.js` | NLU scoring + history follow-ups |
+| `sidecar/core/IntentRouter.js` | LLM-first Auto routing (`intent`, `allow_writes`, `seed_paths`) |
 | `sidecar/core/ModelSelector.js` | Auto/manual model resolution |
-| `sidecar/core/ChatOrchestrator.js` | SSE chat/plan stream |
-| `sidecar/core/AgentToolLoop.js` | Agent mode tool iteration |
-| `sidecar/core/AgentTools.js` | read / search / write / reply |
-| `sidecar/core/FileReview.js` | Incomplete file detection, fix-on-check |
+| `sidecar/core/ChatOrchestrator.js` | SSE chat/plan stream; seeds paths from stack traces |
+| `sidecar/core/AgentToolLoop.js` | Agent tool iteration + session rebuild |
+| `sidecar/core/AgentTools.js` | `read_file`, `search_code`, `search_replace`, `write_file`, `reply` |
+| `sidecar/core/FileReview.js` | Stack trace extraction, corruption hints, fix-on-check |
 | `sidecar/adapters/OpenAICompatibleAdapter.js` | Gateway LLM |
-| `src/panels/ChatPanel.ts` | Stream relay, auto-apply, agent loop, attachments |
-| `src/utils/DiffApplier.ts` | Parse & apply code blocks |
+| `src/panels/ChatPanel.ts` | Stream relay, `pendingWrites` apply, write guards |
+| `src/utils/DiffApplier.ts` | Parse & apply code blocks; `isAgentToolArtifact` |
 | `webview-ui/.../MessageMarkdown.tsx` | Collapsible code cards |
 | `webview-ui/.../ModelPicker.tsx` | Model Auto / Manual picker |
 
@@ -126,9 +140,11 @@ Chat webview IDs: `neurocode.chatView` (right), `neurocode.chatViewLeft` (left).
 
 ### SSE event types
 
-**`/agent/chat/stream`:** `intent` (includes `model`) · `token` · `done` · `error`
+**`/agent/chat/stream`:** `routing` · `intent` (includes `model`) · `step` · `tool_start` · `status` · `stream_set` · `token` · `done` · `error`
 
-**`/agent/loop/stream`:** `intent` · `step` · `tool_start` · `tool_result` · `token` · `done` · `error`
+**`/agent/loop/stream`:** `intent` · `step` · `tool_start` · `tool_result` · `status` · `stream_set` · `done` · `error`
+
+Agent loop does **not** stream raw tool-call tokens to the UI (progress via `status` / `tool_start` only).
 
 ---
 

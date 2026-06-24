@@ -11,9 +11,12 @@ NeuroCode routes all chat through an **OpenAI-compatible API**. Point it at your
   "neurocode.llm.apiKey": "YOUR_SERVICE_TOKEN",
   "neurocode.llm.model": "qwen3-coder",
   "neurocode.llm.modelSelection": "auto",
+  "neurocode.llm.maxOutputTokens": 4096,
   "neurocode.llm.fallbackToOllama": false
 }
 ```
+
+**Agent tuning:** Prefer `search_replace` for line-level fixes. Set `maxOutputTokens` ≥ 2048 (4096 recommended for full-file agent writes). Agent loop uses session-state prompts (~2–4k input per step).
 
 Verify: `curl -s https://llm-gateway.internal.company.com/v1/models -H "Authorization: Bearer YOUR_TOKEN"`
 

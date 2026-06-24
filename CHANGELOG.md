@@ -8,6 +8,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **Agent session state** — `AgentToolLoop` rebuilds a bounded prompt each step (task + session log + cached file previews); input tokens stay ~2–4k per step instead of growing with history
+- **`search_replace` tool** — line-level edits with low output token cost; preferred over `write_file` for import fixes and small changes
+- **LLM-first Auto routing** — `IntentRouter` with `seed_paths` from stack traces and error text; Auto mode uses agent tool loop (not read-only investigate)
+- **Corruption detection** — agent detects files containing tool-call JSON and prompts restore before fix
+- **Write safety guards** — `isAgentToolArtifact` blocks tool JSON in `createOrApplyFile`, `applyPendingWrites`, and `AgentTools.write_file`; agent loop skips markdown auto-apply
+- **`neurocode.llm.maxOutputTokens`** — default raised to **2048**; `getAgentOutputTokens()` for agent steps (up to 8000 cap)
 - **OpenAI-compatible LLM gateway** — single `OpenAICompatibleAdapter` for any `/v1/chat/completions` endpoint (LiteLLM, vLLM, RunPod proxy, OpenAI, custom gateway)
 - **LLM config refactor** — `neurocode.llm.mode`, `apiBaseUrl`, `apiKey`, `model`, `gatewayLabel`; legacy `vllmUrl` / `openaiUrl` / `provider` auto-migrate via `resolveLlmConfig()`
 - **Cursor-style model picker** — **Auto** (optimal model per task) or **Manual** from `GET /v1/models`; `ModelSelector.js`, `GET /llm/models`, `POST /llm/resolve`
@@ -24,7 +30,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - **IntentResolver** — history-aware natural language routing (explain / plan / implement)
 - **Cursor-style intent routing** — `IntentRouter` with permissions (`readOnly`, `allowWrites`, `investigate`); debug/config questions use read-only **Investigate** loop (`read_file`, `search_code`, `reply`) instead of rewriting files; investigate UI shows progress instead of raw tool JSON
 - **Intent router settings** — `neurocode.chat.intentRouter` (`heuristic` | `hybrid` | `llm`), `neurocode.chat.investigateMaxSteps`
-- **Agent tool loop** (`POST /agent/loop/stream`) with tools: `read_file`, `search_code`, `write_file`, `reply`
+- **Agent tool loop** (`POST /agent/loop/stream`) with tools: `read_file`, `search_code`, `search_replace`, `write_file`, `reply`
 - **Auto-apply** — Implement mode writes files when batch completes (`neurocode.chat.autoApply`)
 - **Auto-continue** — Cursor-style continuation for truncated outputs (`neurocode.chat.autoContinue`)
 - **Fix on check** — Incomplete file + review/check auto-routes to implement (`neurocode.chat.fixOnCheck`)
@@ -34,6 +40,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **Auto mode execution** — routes to `AgentToolLoop` with LLM intent resolution; Ask pill uses read-only investigate loop only
+- **Agent prompt strategy** — session cache holds full file bodies; LLM sees previews only (max 3 files × ~1.2k chars)
+- **Seed paths** — stack trace and `./path.tsx` extraction merged with LLM `seed_paths` in `ChatOrchestrator`
 - **RunPod is optional** — GPU pod lifecycle (`neurocode.runpod.*`) is independent of LLM routing; gateway URL is primary
 - Chat orchestration via `ChatOrchestrator.js` with SSE streaming (`POST /agent/chat/stream`); `intent` event includes resolved `model`
 - `LLMRouter.js` modes: `gateway` | `ollama`; provider id: `gateway` | `ollama`
@@ -44,6 +53,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- Agent streamed tool JSON auto-applied to source files via `maybeAutoApplyEdits` / `parseCodeBlocks`
+- Truncated `write_file` at output token limit staging invalid or tool-shaped content
+- Agent loop echoing internal tool labels as final reply (`[Called read_file:…]`)
+- Agent token bloat from append-only message history re-sending full file contents each step
 - SSE client swallowed sidecar `error` events → showed misleading "stream ended without a response"
 - SSE trailing buffer not flushed → missed `done` events
 - `thanks` / social acknowledgments incorrectly triggered implement + file writes

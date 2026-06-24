@@ -212,7 +212,7 @@ neurocode/
     getModelInfo(): Promise<ModelInfo>
   }
   ```
-- Always set a hard token limit: max_tokens = 1500 for code generation calls
+- Respect `neurocode.llm.maxOutputTokens` (default 2048); agent loop uses `getAgentOutputTokens()`
 - Always include a system prompt that enforces output format
 - Temperature: 0.1 for code edits, 0.3 for planning, 0.5 for review agents, 0.7 for explanation
 
@@ -227,6 +227,16 @@ neurocode/
   5. Semantically similar functions (vector search top-3)
   6. Type definitions referenced
 - If total exceeds budget: truncate in reverse priority order, never cut item 1
+
+### Agent Tool Loop Rules (`AgentToolLoop.js`)
+- Tools: `read_file`, `search_code`, `search_replace`, `write_file`, `reply` (fenced `neurocode-tool` JSON)
+- Prefer **search_replace** for line-level fixes; **write_file** only for large rewrites
+- **Session state:** rebuild prompt each step via `rebuildAgentMessages()` — never append full file bodies to growing `messages[]`
+- File cache: max 3 previews (~1.2k chars) in LLM prompt; full content stays in sidecar session
+- Do not stream raw tool-call tokens to the UI — use `status`, `tool_start`, `stream_set`
+- Extension: apply agent edits via `pendingWrites` only; skip `maybeAutoApplyEdits` when `mode === 'tool-loop'`
+- Reject tool JSON and truncated content in `AgentTools` and `DiffApplier.isAgentToolArtifact`
+- Output tokens: `LLMRouter.getAgentOutputTokens()` (min 2048, max 8000)
 
 ### Agent Orchestrator Rules
 - Max 8 steps per plan (prevent infinite loops)
