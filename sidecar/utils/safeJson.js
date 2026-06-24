@@ -49,6 +49,19 @@ export function sanitizeForJson(value, seen = new WeakSet()) {
 
 /**
  * @param {unknown} value
+ * @param {number} [maxLen]
+ * @returns {string}
+ */
+export function safeJsonPreview(value, maxLen = 4000) {
+	try {
+		const text = JSON.stringify(sanitizeForJson(value), null, 2);
+		return text.length > maxLen ? `${text.slice(0, maxLen)}…` : text;
+	} catch (err) {
+		const message = err instanceof Error ? err.message : 'serialize failed';
+		return JSON.stringify({ error: message });
+	}
+/**
+ * @param {unknown} value
  * @returns {string}
  */
 export function safeJsonStringify(value) {

@@ -4,7 +4,7 @@ import { trimHistory } from './ChatOrchestrator.js';
 import { recordAnalyticsEvent } from './AnalyticsCollector.js';
 import { executeAgentTool } from './AgentTools.js';
 import { parseToolCall } from './AgentToolLoop.js';
-import { sanitizeForJson } from '../utils/safeJson.js';
+import { sanitizeForJson, safeJsonPreview } from '../utils/safeJson.js';
 
 const INVESTIGATE_TOOLS = ['read_file', 'search_code', 'reply'];
 
@@ -320,7 +320,7 @@ export async function streamInvestigateLoop(services, params, write) {
 			messages.push({ role: 'assistant', content: response });
 			messages.push({
 				role: 'user',
-				content: `Tool result for ${toolCall.tool}:\n\`\`\`json\n${JSON.stringify(result, null, 2)}\n\`\`\`\n\nContinue investigating or call reply with your answer.`,
+				content: `Tool result for ${toolCall.tool}:\n\`\`\`json\n${safeJsonPreview(result)}\n\`\`\`\n\nContinue investigating or call reply with your answer.`,
 			});
 		}
 
@@ -355,7 +355,7 @@ export async function streamInvestigateLoop(services, params, write) {
 				readOnly: true,
 				allowWrites: false,
 				mode: 'investigate-loop',
-				toolLog,
+				toolLog: sanitizeForJson(toolLog),
 				pendingWrites: [],
 				shardsUsed: shards.map((s) => ({
 					file: s.relativeFile,

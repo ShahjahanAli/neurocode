@@ -3,6 +3,7 @@ import { resolveModelId } from './ModelSelector.js';
 import { trimHistory } from './ChatOrchestrator.js';
 import { recordAnalyticsEvent } from './AnalyticsCollector.js';
 import { executeAgentTool, AGENT_TOOL_NAMES } from './AgentTools.js';
+import { safeJsonPreview, sanitizeForJson } from '../utils/safeJson.js';
 
 const AGENT_SYSTEM = `You are NeuroCode Agent — an autonomous coding assistant inside VS Code (like Cursor Agent).
 
@@ -218,7 +219,7 @@ export async function streamAgentToolLoop(services, params, write) {
 			const result = await executeAgentTool(toolCall.tool, toolCall.args, toolCtx);
 			const summary = summarizeToolResult(result);
 
-			write({ type: 'tool_result', tool: toolCall.tool, result: summary });
+			write({ type: 'tool_result', tool: toolCall.tool, result: sanitizeForJson(summary) });
 			toolLog.push({ tool: toolCall.tool, args: toolCall.args, result: summary });
 
 			if (toolCall.tool === 'write_file' && result.success && result.staged) {
@@ -231,7 +232,7 @@ export async function streamAgentToolLoop(services, params, write) {
 			messages.push({ role: 'assistant', content: response });
 			messages.push({
 				role: 'user',
-				content: `Tool result for ${toolCall.tool}:\n\`\`\`json\n${JSON.stringify(result, null, 2)}\n\`\`\`\n\nContinue with the next tool call, or reply when done.`,
+				content: `Tool result for ${toolCall.tool}:\n\`\`\`json\n${safeJsonPreview(result)}\n\`\`\`\n\nContinue with the next tool call, or reply when done.`,
 			});
 		}
 
@@ -274,7 +275,7 @@ export async function streamAgentToolLoop(services, params, write) {
 				agentic: true,
 				mode: 'tool-loop',
 				pendingWrites,
-				toolLog,
+				toolLog: sanitizeForJson(toolLog),
 				shardsUsed: shards.map((s) => ({
 					file: s.relativeFile,
 					reason: s.reason,

@@ -1,4 +1,36 @@
 import axios from 'axios';
+import { safeJsonPreview } from '../utils/safeJson.js';
+
+/**
+ * @param {unknown} err
+ * @returns {string}
+ */
+function formatAxiosError(err) {
+	if (!axios.isAxiosError(err)) {
+		return err instanceof Error ? err.message : String(err);
+	}
+	if (err.code === 'ECONNABORTED') {
+		return 'request timed out';
+	}
+	if (err.code === 'ECONNREFUSED') {
+		return 'connection refused — is the gateway running?';
+	}
+	const status = err.response?.status ?? 'network';
+	const data = err.response?.data;
+	if (typeof data === 'string') {
+		return data.slice(0, 300);
+	}
+	if (data && typeof data === 'object' && typeof data.pipe === 'function') {
+		return `HTTP ${status} (stream response)`;
+	}
+	if (data?.error?.message) {
+		return String(data.error.message).slice(0, 300);
+	}
+	if (data && typeof data === 'object') {
+		return safeJsonPreview(data, 300);
+	}
+	return `HTTP ${status}`;
+}
 
 /**
  * Generic OpenAI-compatible chat completions adapter.
@@ -54,9 +86,7 @@ export class OpenAICompatibleAdapter {
 				if (err.response?.status === 404) {
 					throw new Error(`Model not found on gateway: ${this.model}`);
 				}
-				const detail = err.response?.data?.error?.message
-					?? (typeof err.response?.data === 'string' ? err.response.data : JSON.stringify(err.response?.data ?? {}));
-				throw new Error(`LLM gateway request failed (${err.response?.status ?? 'network'}): ${String(detail).slice(0, 300)}`);
+				throw new Error(`LLM gateway request failed (${err.response?.status ?? 'network'}): ${formatAxiosError(err)}`);
 			}
 			throw err;
 		}
@@ -90,9 +120,7 @@ export class OpenAICompatibleAdapter {
 				if (err.code === 'ECONNABORTED') {
 					throw new Error('LLM gateway request timed out — try again or reduce context size');
 				}
-				const body = err.response?.data;
-				const detail = typeof body === 'string' ? body : JSON.stringify(body ?? {});
-				throw new Error(`LLM gateway stream failed (${err.response?.status ?? 'network'}): ${detail.slice(0, 300)}`);
+				throw new Error(`LLM gateway stream failed (${err.response?.status ?? 'network'}): ${formatAxiosError(err)}`);
 			}
 			throw err;
 		}
