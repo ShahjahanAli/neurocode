@@ -4,6 +4,7 @@ import { resolveModelId } from './ModelSelector.js';
 import { getPrimaryReviewShard } from './FileReview.js';
 import { resolveUserIntent, resolveIntentPermissions } from './IntentRouter.js';
 import { streamInvestigateLoop } from './InvestigateLoop.js';
+import { streamAgentToolLoop } from './AgentToolLoop.js';
 import { recordAnalyticsEvent } from './AnalyticsCollector.js';
 
 /** @typedef {'chat' | 'plan' | 'edit'} ChatIntent */
@@ -220,6 +221,39 @@ function shouldUseInvestigateLoop(resolved, chatMode = 'auto') {
 }
 
 /**
+ * Cursor-style agent loop: read → search → write when the LLM router grants writes.
+ * @param {import('./IntentRouter.js').IntentResolution} resolved
+ * @param {ChatMode} [chatMode]
+ * @returns {boolean}
+ */
+function shouldUseAgentToolLoop(resolved, chatMode = 'auto') {
+	if (resolved.agentic || chatMode === 'agent') {
+		return true;
+	}
+	if (chatMode === 'implement') {
+		return true;
+	}
+	return resolved.intent === 'edit' && resolved.allowWrites && !resolved.investigate;
+}
+
+/**
+ * @param {import('./services.js').services} services
+ * @param {object} loopParams
+ * @param {(event: object) => void} write
+ * @returns {Promise<object>}
+ */
+async function runAgentToolLoopCollect(services, loopParams, write) {
+	let doneData;
+	await streamAgentToolLoop(services, loopParams, (event) => {
+		write?.(event);
+		if (event.type === 'done') {
+			doneData = event.data;
+		}
+	});
+	return doneData ?? { response: 'Agent loop failed.', intent: 'edit' };
+}
+
+/**
  * @param {import('./services.js').services} services
  * @param {object} params
  * @param {string} params.task
@@ -255,20 +289,12 @@ export async function runOrchestratedChat(services, params) {
 		}
 	}
 
-	const assembleResult = await services.shardManager.assembleContext(
-		task,
-		activeFile,
-		projectPath,
-		services.memoryGraph,
-		services.crossRepoIndexer,
-		attachments,
-	);
-	const { shards, totalTokens, budget, indexed, fileCount } = assembleResult;
-
-	const routerAdapter = chatMode === 'auto' ? await LLMRouter.getAdapter().catch(() => null) : null;
-	const resolved = await resolveIntentWithContext(task, forceIntent, shards, history, {
+	const routerAdapter = !forceIntent && chatMode === 'auto'
+		? await LLMRouter.getAdapter().catch(() => null)
+		: null;
+	const resolved = await resolveIntentWithContext(task, forceIntent, [], history, {
 		chatMode,
-		fixOnCheck,
+		fixOnCheck: false,
 	}, routerAdapter);
 
 	if (shouldUseInvestigateLoop(resolved, chatMode)) {
@@ -282,6 +308,8 @@ export async function runOrchestratedChat(services, params) {
 			modelSelection,
 			selectedModel,
 			chatMode,
+			prefetchShards: false,
+			routingReason: resolved.reason,
 		}, (event) => {
 			if (event.type === 'done') {
 				investigateData = event.data;
@@ -289,6 +317,32 @@ export async function runOrchestratedChat(services, params) {
 		});
 		return investigateData ?? { response: 'Investigation failed.', intent: 'chat' };
 	}
+
+	if (shouldUseAgentToolLoop(resolved, chatMode)) {
+		return runAgentToolLoopCollect(services, {
+			task: resolved.effectiveTask,
+			activeFile,
+			projectPath,
+			history,
+			attachments,
+			modelSelection,
+			selectedModel,
+			chatMode: chatMode === 'auto' ? 'implement' : chatMode,
+			prefetchShards: false,
+			allowWrites: resolved.allowWrites,
+			routingReason: resolved.reason,
+		});
+	}
+
+	const assembleResult = await services.shardManager.assembleContext(
+		task,
+		activeFile,
+		projectPath,
+		services.memoryGraph,
+		services.crossRepoIndexer,
+		attachments,
+	);
+	const { shards, totalTokens, budget, indexed, fileCount } = assembleResult;
 
 	const effectiveIntent = resolved.intent;
 	const effectiveTask = resolved.effectiveTask;
@@ -416,21 +470,23 @@ export async function streamOrchestratedChat(services, params, write) {
 			}
 		}
 
-		const assembleResult = await services.shardManager.assembleContext(
-			task,
-			activeFile,
-			projectPath,
-			services.memoryGraph,
-			services.crossRepoIndexer,
-			attachments,
-		);
-		const { shards, totalTokens, budget, indexed, fileCount } = assembleResult;
-
-		const routerAdapter = chatMode === 'auto' ? await LLMRouter.getAdapter().catch(() => null) : null;
-		const resolved = await resolveIntentWithContext(task, forceIntent, shards, history, {
+		const routerAdapter = !forceIntent && chatMode === 'auto'
+			? await LLMRouter.getAdapter().catch(() => null)
+			: null;
+		const resolved = await resolveIntentWithContext(task, forceIntent, [], history, {
 			chatMode,
-			fixOnCheck,
+			fixOnCheck: false,
 		}, routerAdapter);
+
+		write({
+			type: 'routing',
+			intent: resolved.intent,
+			agentic: resolved.agentic,
+			investigate: resolved.investigate,
+			readOnly: resolved.readOnly,
+			allowWrites: resolved.allowWrites,
+			reason: resolved.reason,
+		});
 
 		if (shouldUseInvestigateLoop(resolved, chatMode)) {
 			return streamInvestigateLoop(services, {
@@ -442,8 +498,36 @@ export async function streamOrchestratedChat(services, params, write) {
 				modelSelection,
 				selectedModel,
 				chatMode,
+				prefetchShards: false,
+				routingReason: resolved.reason,
 			}, write);
 		}
+
+		if (shouldUseAgentToolLoop(resolved, chatMode)) {
+			return streamAgentToolLoop(services, {
+				task: resolved.effectiveTask,
+				activeFile,
+				projectPath,
+				history,
+				attachments,
+				modelSelection,
+				selectedModel,
+				chatMode: chatMode === 'auto' ? 'implement' : chatMode,
+				prefetchShards: false,
+				allowWrites: resolved.allowWrites,
+				routingReason: resolved.reason,
+			}, write);
+		}
+
+		const assembleResult = await services.shardManager.assembleContext(
+			task,
+			activeFile,
+			projectPath,
+			services.memoryGraph,
+			services.crossRepoIndexer,
+			attachments,
+		);
+		const { shards, totalTokens, budget, indexed, fileCount } = assembleResult;
 
 		const effectiveIntent = resolved.intent;
 		const effectiveTask = resolved.effectiveTask;

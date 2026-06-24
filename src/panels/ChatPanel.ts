@@ -524,6 +524,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 					}),
 				},
 				(chunk) => {
+					if (chunk.type === 'routing' && !isContinueRound) {
+						this.post({
+							type: 'streamIntent',
+							intent: chunk.intent,
+							agentic: chunk.agentic,
+							investigate: chunk.investigate,
+							model: chunk.model,
+							routingReason: chunk.reason,
+						});
+					}
 					if (chunk.type === 'intent' && !isContinueRound) {
 						this.post({
 							type: 'streamIntent',
@@ -554,7 +564,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 							? `Reading \`${pathArg}\`…`
 							: chunk.tool === 'search_code'
 								? 'Searching codebase…'
-								: `Tool: ${chunk.tool}…`;
+								: chunk.tool === 'write_file' && pathArg
+									? `Writing \`${pathArg}\`…`
+									: `Tool: ${chunk.tool}…`;
 						this.post({ type: 'batchProgress', round: 1, message: label });
 					}
 					if (chunk.type === 'token' && chunk.content) {
@@ -618,20 +630,40 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 		};
 	}
 
-	/** @param text - User message. */
-	private isSocialAcknowledgment(text: string): boolean {
-		return /^(thanks?|thank you|thx|ty|cheers|appreciated|much appreciated|got it|cool|nice|perfect|great|awesome)\b[!. ]*$/i.test(
-			text.trim(),
-		);
-	}
+	/**
+	 * Applies staged write_file results from the agent tool loop.
+	 * @param data - Agent chat response.
+	 * @param folder - Workspace folder.
+	 */
+	private async maybeApplyPendingWrites(
+		data: AgentChatData,
+		folder: vscode.WorkspaceFolder,
+	): Promise<AgentChatData> {
+		const cfg = getConfig();
+		if (!cfg.chat.autoApply || !data.pendingWrites?.length || data.readOnly || data.allowWrites === false) {
+			return data;
+		}
 
-	/** @param text - User message that may be debug/env/payload investigation. */
-	private isDiagnosticTask(text: string): boolean {
-		const m = text.trim().toLowerCase();
-		return (
-			/\b(still not|not resolved|not working|payload|\.env|why am i seeing|go over|full system|test message|debug|root cause)\b/i.test(m) &&
-			!/\b(implement|apply|write the code|fix it now|just fix|go ahead and)\b/i.test(m)
+		const applied = await this.applyPendingWrites(data.pendingWrites, folder.uri.fsPath);
+		if (applied.length === 0) {
+			return data;
+		}
+
+		void vscode.window.showInformationMessage(
+			`NeuroCode: Applied ${applied.length} file(s)`,
 		);
+
+		const summary = applied
+			.map((f) => `- \`${f.file}\` (${f.action})`)
+			.join('\n');
+
+		return {
+			...data,
+			intent: 'edit',
+			agentic: data.agentic ?? true,
+			filesApplied: applied,
+			response: `${data.response}\n\n---\n**Applied to your project:**\n${summary}`,
+		};
 	}
 
 	/**
@@ -675,12 +707,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 		try {
 			await this.ensureIndexed(folder.uri.fsPath);
 
-			const effectiveOptions = this.isSocialAcknowledgment(task)
-				? { ...options, chatMode: 'explain' as ChatMode }
-				: options;
-
 			const cfg = getConfig();
-			const activeMode = effectiveOptions?.chatMode ?? cfg.chat.mode;
+			const activeMode = options?.chatMode ?? cfg.chat.mode;
 
 			let rawData: AgentChatData;
 			if (activeMode === 'agent' && !options?.isManualContinue) {
@@ -694,18 +722,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 					folder,
 					editor,
 					forceIntent,
-					effectiveOptions,
+					options,
 				);
 			}
 
+			rawData = await this.maybeApplyPendingWrites(rawData, folder);
+
 			let finalData = await this.maybeApplyOrphanCode(
-				await this.maybeAutoApplyEdits(rawData, folder.uri.fsPath, task),
+				await this.maybeAutoApplyEdits(rawData, folder.uri.fsPath),
 				folder.uri.fsPath,
 			);
-
-			if (this.isSocialAcknowledgment(task)) {
-				finalData = { ...finalData, intent: 'chat', filesApplied: undefined };
-			}
 
 			const shouldRunPlanAgent =
 				activeMode !== 'agent' &&
@@ -853,30 +879,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
 		this.post({ type: 'batchProgress', round: 0 });
 
-		if (!cfg.chat.autoApply || !data.pendingWrites?.length) {
-			return data;
-		}
-
-		const applied = await this.applyPendingWrites(data.pendingWrites, folder.uri.fsPath);
-		if (applied.length === 0) {
-			return data;
-		}
-
-		void vscode.window.showInformationMessage(
-			`NeuroCode Agent: Applied ${applied.length} file(s)`,
-		);
-
-		const summary = applied
-			.map((f) => `- \`${f.file}\` (${f.action})`)
-			.join('\n');
-
-		return {
-			...data,
-			intent: 'edit',
-			agentic: true,
-			filesApplied: applied,
-			response: `${data.response}\n\n---\n**Applied to your project:**\n${summary}`,
-		};
+		return data;
 	}
 
 	/**
@@ -1006,19 +1009,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 	private async maybeAutoApplyEdits(
 		data: AgentChatData,
 		projectPath: string,
-		userTask?: string,
 	): Promise<AgentChatData> {
 		if (data.intent !== 'edit' || !getConfig().chat.autoApply || data.readOnly || data.allowWrites === false) {
 			return data;
-		}
-
-		if (userTask && this.isDiagnosticTask(userTask)) {
-			return {
-				...data,
-				readOnly: true,
-				allowWrites: false,
-				response: `${data.response}\n\n---\n**No files written** — this looked like a debug/investigation question. Switch to **Implement** mode or say **implement the fix** to apply code changes.`,
-			};
 		}
 
 		const truncated = this.isTruncatedResponse(data.response);

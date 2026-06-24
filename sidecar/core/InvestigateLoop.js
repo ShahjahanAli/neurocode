@@ -189,20 +189,38 @@ export async function streamInvestigateLoop(services, params, write) {
 		modelSelection = 'auto',
 		selectedModel,
 		chatMode = 'auto',
+		prefetchShards = false,
+		routingReason,
 	} = params;
 
 	const maxSteps = parseInt(process.env.NEUROCODE_INVESTIGATE_MAX_STEPS || '8', 10);
 
 	try {
-		const assembleResult = await services.shardManager.assembleContext(
-			task,
-			activeFile,
-			projectPath,
-			services.memoryGraph,
-			services.crossRepoIndexer,
-			attachments,
-		);
-		const { shards, totalTokens, budget, indexed, fileCount } = assembleResult;
+		let shards = [];
+		let totalTokens = 0;
+		let budget = services.shardManager.MAX_TOKENS;
+		let indexed = false;
+		let fileCount = 0;
+
+		if (prefetchShards) {
+			const assembleResult = await services.shardManager.assembleContext(
+				task,
+				activeFile,
+				projectPath,
+				services.memoryGraph,
+				services.crossRepoIndexer,
+				attachments,
+			);
+			shards = assembleResult.shards;
+			totalTokens = assembleResult.totalTokens;
+			budget = assembleResult.budget;
+			indexed = assembleResult.indexed;
+			fileCount = assembleResult.fileCount;
+		} else {
+			const row = services.db.prepare('SELECT COUNT(*) AS c FROM files').get();
+			fileCount = row?.c ?? 0;
+			indexed = fileCount > 0;
+		}
 
 		const adapter = await LLMRouter.getAdapter();
 		const models = await LLMRouter.listModels();
@@ -225,6 +243,7 @@ export async function streamInvestigateLoop(services, params, write) {
 			readOnly: true,
 			mode: 'investigate-loop',
 			model: resolvedModel,
+			reason: routingReason,
 		});
 
 		const provider = LLMRouter.getActiveProvider();
@@ -237,13 +256,8 @@ export async function streamInvestigateLoop(services, params, write) {
 			vectorStore: services.vectorStore,
 		};
 
-		const prefetched = await prefetchInvestigateFiles(task, toolCtx, write);
-		const toolLog = prefetched.map((p) => ({
-			tool: 'read_file',
-			args: { path: p.path },
-			result: summarizeToolResult(p.result),
-			prefetch: true,
-		}));
+		const prefetched = [];
+		const toolLog = [];
 
 		const messages = buildInvestigateMessages(task, shards, history, prefetched);
 		let finalReply = '';
@@ -354,6 +368,7 @@ export async function streamInvestigateLoop(services, params, write) {
 				investigate: true,
 				readOnly: true,
 				allowWrites: false,
+				routingReason,
 				mode: 'investigate-loop',
 				toolLog: sanitizeForJson(toolLog),
 				pendingWrites: [],

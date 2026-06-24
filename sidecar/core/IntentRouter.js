@@ -54,27 +54,56 @@ const FIX_REQUEST_RE =
 
 /** Debug / config questions — investigate, do not rewrite files. */
 const INVESTIGATE_RE =
-	/\b(why|how come|can you check|check why|root cause|what causes|what caused|debug|diagnos|figure out|not resolved|still (?:not )?(?:working|resolved|fixed|correct|solved)|still (?:getting|seeing|have)|not working|doesn'?t work|didn'?t work|not solving|same (?:issue|problem|payload|error)|env(?:ironment)?(?:\s+file)?|\.env|dotenv|environment variable|config(?:uration)?|settings?|payload|api\s*key|which model|wrong model|default (?:model|setting)|hardcoded|should (?:it|we) (?:use|read)|check (?:the |my )?(?:env|config|settings|\.env)|reading from env|from env|go over|walk (?:me )?through|trace (?:through)?|review (?:the )?(?:full |whole )?(?:system|flow|stack)|full system|entire (?:flow|stack)|end.to.end|test message|why am i seeing|element type is invalid|default export|named import|mixed up default)\b/i;
+	/\b(why (?:is|does|am i|are|did|would|can)|how come|can you check why|check why|root cause|what causes|what caused|debug|diagnos|figure out|not resolved|still (?:not )?(?:working|resolved|fixed|correct|solved)|still (?:getting|seeing|have)|not working|doesn'?t work|didn'?t work|not solving|same (?:issue|problem|payload|error)|env(?:ironment)?(?:\s+file)?|\.env|dotenv|environment variable|config(?:uration)?|settings?|payload|api\s*key|which model|wrong model|default (?:model|setting)|hardcoded|should (?:it|we) (?:use|read)|check (?:the |my )?(?:env|config|settings|\.env)|reading from env|from env|go over|walk (?:me )?through|trace (?:through)?|review (?:the )?(?:full |whole )?(?:system|flow|stack)|full system|entire (?:flow|stack)|end.to.end|test message|why am i seeing)\b/i;
 
 const EXPLICIT_WRITE_RE =
-	/\b(implement|apply|write (?:the )?code|change (?:the )?code|update (?:the )?file|edit (?:the )?file|create (?:the )?file|go ahead and (?:fix|implement)|please (?:fix|implement|update)|just fix)\b/i;
+	/\b(implement|apply|write (?:the )?code|change (?:the )?code|update (?:the )?file|edit (?:the )?file|create (?:the )?file|go ahead and (?:fix|implement)|please (?:fix|implement|update)|just fix|solve this|fix this)\b/i;
+
+/** User wants the agent to apply a fix (Cursor-style), not manual instructions. */
+const DELEGATE_FIX_RE =
+	/\b(you (?:fix|update|change|apply|do)|fix (?:it|this)(?: for me)?|update it(?: for me| accordingly)?|apply (?:the )?fix|make the change|do the fix|you should (?:fix|update|change))\b/i;
+
+const FIX_ERROR_RE =
+	/\b(solve|fix|resolve|repair)\b[\s\S]{0,48}\b(error|issue|bug)\b|\b(error|issue|bug)\b[\s\S]{0,48}\b(solve|fix|resolve|repair)\b/i;
+
+const REJECT_MANUAL_FIX_RE =
+	/\b(why should i|why do i have to|why must i|you update|you fix|you change|not me|don't tell me)\b/i;
 
 const OPTION_PICK_RE =
 	/\b(option|choice|number|#|item|feature|step)\s*#?\s*(\d+)\b/i;
 
 const ROUTER_MODE = (process.env.NEUROCODE_INTENT_ROUTER || 'llm').toLowerCase();
 
-const LLM_ROUTER_PROMPT = `You route messages for a VS Code coding assistant (Cursor-style).
-Return ONLY valid JSON (no markdown):
-{"intent":"chat"|"plan"|"edit","investigate":boolean,"allow_writes":boolean,"confidence":0.0-1.0,"reason":"short"}
+const LLM_ROUTER_PROMPT = `You are the intent router for NeuroCode — a Cursor-style AI coding assistant in VS Code.
+Classify the user's latest message using conversation context. This runs BEFORE any tools, file reads, or code writes.
 
-Rules:
-- Questions about why/how/errors/config/env/payload/models → intent chat, investigate true, allow_writes false
-- "still not working", "go over the system", regression after a failed fix → investigate true, allow_writes false
-- Explicit requests to implement/fix/write code → intent edit, investigate false, allow_writes true
-- Multi-step feature design → intent plan, investigate false, allow_writes false
-- "thanks" / social → intent chat, investigate false, allow_writes false
-- When unsure, prefer chat + investigate over edit (do not write files)`;
+Return ONLY valid JSON (no markdown fences):
+{
+  "intent": "chat" | "plan" | "edit",
+  "investigate": boolean,
+  "allow_writes": boolean,
+  "effective_task": string,
+  "confidence": number,
+  "reason": string
+}
+
+Field meanings:
+- intent "chat": explain, discuss, answer questions
+- intent "plan": multi-step feature/refactor roadmap (no code writes yet)
+- intent "edit": produce code changes
+- investigate true: use read-only tools first (read_file, search) — debug/trace errors, inspect config/env, understand before acting
+- allow_writes true: agent may write/apply files to disk (implement mode)
+- effective_task: one clear instruction for the worker (include filenames from stack traces when present)
+
+Cursor-style routing (use judgment, not keywords):
+- User wants a fix applied ("fix", "solve", "you update", "you do it", "why should I change" after you suggested a fix) → intent edit, allow_writes true, investigate false — agent will read files then write
+- User pasted an error/stack trace and wants it resolved → intent edit, allow_writes true, investigate false unless they only ask "why" or "explain"
+- User asks why/how/debug/env/payload/check (no fix requested) → intent chat, investigate true, allow_writes false — read-only tool loop
+- Greeting/thanks/small talk → intent chat, investigate false, allow_writes false — brief friendly reply, no tools
+- Large feature / migration / "build X like Y" → intent plan, investigate false, allow_writes false
+- When ambiguous: investigate true if reading code first helps; allow_writes true only when user clearly wants changes applied
+
+effective_task must be actionable (bad: "help user"; good: "Fix import/export mismatch between app/page.tsx and ChatInterface").`;
 
 /**
  * @param {string} message
@@ -89,7 +118,10 @@ export function isLikelyQuestion(message) {
  * @param {string} message
  * @returns {boolean}
  */
-export function isInvestigateTask(message) {
+export function isInvestigateTask(message, history = []) {
+	if (wantsAgentToFix(message, history)) {
+		return false;
+	}
 	const m = message.trim().toLowerCase();
 	if (INVESTIGATE_RE.test(m)) {
 		return true;
@@ -110,8 +142,11 @@ export function isInvestigateTask(message) {
  * @returns {boolean}
  */
 export function isRegressionReport(message, history = []) {
+	if (wantsAgentToFix(message, history)) {
+		return false;
+	}
 	const m = message.trim().toLowerCase();
-	if (isInvestigateTask(message)) {
+	if (isInvestigateTask(message, history)) {
 		return true;
 	}
 	if (!/\b(still|not working|not resolved|not solving|still not solved|didn'?t work|doesn'?t work|same problem|same issue|why you|why are you not)\b/i.test(m)) {
@@ -161,9 +196,71 @@ function isWorkCompleteMessage(content) {
 	);
 }
 
+function isAssistantFixInstruction(content) {
+	if (!content) {
+		return false;
+	}
+	const lower = content.toLowerCase();
+	return (
+		lower.includes('to fix this') ||
+		lower.includes('change the import') ||
+		lower.includes('change the export') ||
+		lower.includes('you need to change') ||
+		lower.includes('resolve the') ||
+		(lower.includes('import ') && lower.includes('from') && (lower.includes('change') || lower.includes('fix')))
+	);
+}
+
+/**
+ * @param {string} message
+ * @param {Array<{role: string, content: string}>} [history]
+ * @returns {boolean}
+ */
+export function wantsAgentToFix(message, history = []) {
+	const trimmed = message.trim();
+	if (DELEGATE_FIX_RE.test(trimmed) || FIX_ERROR_RE.test(trimmed)) {
+		return true;
+	}
+	if (EXPLICIT_WRITE_RE.test(trimmed) && /\b(error|fix|import|export|element type)\b/i.test(trimmed)) {
+		return true;
+	}
+	const lastAssistant = lastAssistantTurn(history);
+	if (lastAssistant && isAssistantFixInstruction(lastAssistant.content)) {
+		if (REJECT_MANUAL_FIX_RE.test(trimmed) || DELEGATE_FIX_RE.test(trimmed)) {
+			return true;
+		}
+		if (CONSENT_RE.test(trimmed)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/**
+ * @param {string} userTask
+ * @param {string} [assistantContext]
+ * @returns {string}
+ */
+function buildDelegateFixTask(userTask, assistantContext = '') {
+	const base = assistantContext
+		? `Apply the fix from your previous message. User now says: ${userTask}\n\nPrior analysis:\n${assistantContext.slice(0, 2500)}`
+		: userTask;
+	return `${base}
+
+Requirements (Cursor-style — write files, do not tell the user to edit manually):
+- Read the relevant files first (e.g. app/page.tsx, components/chat/ChatInterface.tsx)
+- Output FULL corrected file(s) in fenced code blocks
+- First line inside each block MUST be: // filename: relative/path.tsx
+- Fix import/export mismatches consistently (default export ↔ default import)
+- Do not only show a one-line import snippet — write the complete file`;
+}
+
 function isPendingImplementOffer(content) {
 	if (isWorkCompleteMessage(content)) {
 		return false;
+	}
+	if (isAssistantFixInstruction(content)) {
+		return true;
 	}
 	const lower = content.toLowerCase();
 	return (
@@ -189,6 +286,12 @@ function inferFollowUpTask(message, history) {
 	const optionMatch = trimmed.match(OPTION_PICK_RE);
 	if (optionMatch) {
 		return `Implement option ${optionMatch[2]} from your previous response. Use the conversation context and write the code into the project.`;
+	}
+
+	if (lastAssistant && isAssistantFixInstruction(lastAssistant.content)) {
+		if (DELEGATE_FIX_RE.test(trimmed) || REJECT_MANUAL_FIX_RE.test(trimmed) || CONSENT_RE.test(trimmed)) {
+			return buildDelegateFixTask(trimmed, lastAssistant.content);
+		}
 	}
 
 	if (!CONSENT_RE.test(trimmed) && trimmed.split(/\s+/).length > 6) {
@@ -220,7 +323,7 @@ function scoreIntents(message, history) {
 	const m = message.toLowerCase().trim();
 	const scores = { chat: 0, plan: 0, edit: 0, agentic: 0 };
 	const question = isLikelyQuestion(message);
-	const investigate = isInvestigateTask(message);
+	const investigate = isInvestigateTask(message, history);
 
 	if (investigate) {
 		scores.chat += 10;
@@ -409,6 +512,19 @@ export function resolveUserIntent(task, options = {}) {
 		});
 	}
 
+	if (wantsAgentToFix(task, history)) {
+		const lastA = lastAssistantTurn(history);
+		return finalizeResolution({
+			intent: 'edit',
+			effectiveTask: buildDelegateFixTask(task, lastA?.content ?? ''),
+			readOnly: false,
+			allowWrites: true,
+			investigate: false,
+			confidence: 'high',
+			reason: 'user:delegate-fix',
+		});
+	}
+
 	const followUpTask = inferFollowUpTask(task, history);
 	if (followUpTask && !isRegressionReport(task, history)) {
 		return finalizeResolution({
@@ -434,7 +550,7 @@ export function resolveUserIntent(task, options = {}) {
 		});
 	}
 
-	if (isInvestigateTask(task) && !EXPLICIT_WRITE_RE.test(trimmed)) {
+	if (isInvestigateTask(task, history) && !EXPLICIT_WRITE_RE.test(trimmed)) {
 		return finalizeResolution({
 			intent: 'chat',
 			effectiveTask: task,
@@ -512,53 +628,24 @@ export function resolveUserIntent(task, options = {}) {
 }
 
 /**
- * LLM router must not override heuristic investigate / regression safety.
+ * Safe default when the LLM router is unavailable (gateway down).
  * @param {string} task
- * @param {IntentResolution} heuristic
- * @param {IntentResolution} llm
  * @returns {IntentResolution}
  */
-function mergeLlmWithHeuristic(task, heuristic, llm) {
-	const trimmed = task.trim();
-	const mustInvestigate =
-		heuristic.investigate ||
-		isInvestigateTask(task) ||
-		(isLikelyQuestion(task) && !EXPLICIT_WRITE_RE.test(trimmed));
-
-	if (mustInvestigate && !EXPLICIT_WRITE_RE.test(trimmed)) {
-		return finalizeResolution({
-			...heuristic,
-			intent: 'chat',
-			investigate: true,
-			readOnly: true,
-			allowWrites: false,
-			agentic: false,
-			autoFixed: false,
-			reason: `safety:investigate(heuristic=${heuristic.reason},llm=${llm.reason})`,
-		});
-	}
-
-	if (llm.intent === 'edit' && isLikelyQuestion(task) && !EXPLICIT_WRITE_RE.test(trimmed)) {
-		return finalizeResolution({
-			intent: 'chat',
-			effectiveTask: task,
-			readOnly: true,
-			allowWrites: false,
-			investigate: true,
-			confidence: llm.confidence,
-			reason: `safety:question→investigate(llm=${llm.reason})`,
-		});
-	}
-
+function fallbackResolution(task) {
 	return finalizeResolution({
-		...llm,
-		autoFixed: heuristic.autoFixed,
-		agentic: llm.agentic || heuristic.agentic,
+		intent: 'chat',
+		effectiveTask: task,
+		readOnly: true,
+		allowWrites: false,
+		investigate: true,
+		confidence: 'low',
+		reason: 'fallback:llm-unavailable',
 	});
 }
 
 /**
- * Optional LLM classifier for ambiguous Auto messages.
+ * Cursor-style LLM intent classifier — sole router for Auto mode.
  * @param {import('../adapters/OpenAICompatibleAdapter.js').OpenAICompatibleAdapter | import('../adapters/OllamaAdapter.js').OllamaAdapter} adapter
  * @param {string} task
  * @param {Array<{role: string, content: string}>} history
@@ -566,7 +653,7 @@ function mergeLlmWithHeuristic(task, heuristic, llm) {
  */
 async function resolveWithLlm(adapter, task, history) {
 	try {
-		const recent = history.slice(-4).map((t) => `${t.role}: ${t.content.slice(0, 400)}`).join('\n');
+		const recent = history.slice(-6).map((t) => `${t.role}: ${t.content.slice(0, 500)}`).join('\n');
 		const raw = await adapter.chat(
 			[
 				{ role: 'system', content: LLM_ROUTER_PROMPT },
@@ -575,16 +662,20 @@ async function resolveWithLlm(adapter, task, history) {
 					content: `Recent conversation:\n${recent || '(none)'}\n\nLatest user message:\n${task}`,
 				},
 			],
-			{ temperature: 0, max_tokens: 120 },
+			{ temperature: 0, max_tokens: 280 },
 		);
 		const cleaned = raw.replace(/```json\n?|\n?```/g, '').trim();
 		const parsed = JSON.parse(cleaned);
 		const intent = ['chat', 'plan', 'edit'].includes(parsed.intent) ? parsed.intent : 'chat';
 		const investigate = Boolean(parsed.investigate);
 		const allowWrites = Boolean(parsed.allow_writes) && !investigate;
+		const effectiveTask =
+			typeof parsed.effective_task === 'string' && parsed.effective_task.trim()
+				? parsed.effective_task.trim()
+				: task;
 		return finalizeResolution({
 			intent,
-			effectiveTask: task,
+			effectiveTask,
 			readOnly: !allowWrites,
 			allowWrites,
 			investigate,
@@ -599,39 +690,33 @@ async function resolveWithLlm(adapter, task, history) {
 }
 
 /**
- * Resolves intent with optional LLM assist (hybrid / llm modes).
+ * Resolves intent for Auto mode via LLM only (Cursor-style). Heuristic regex is legacy/debug only.
  * @param {string} task
  * @param {object} options
  * @param {import('../adapters/OpenAICompatibleAdapter.js').OpenAICompatibleAdapter | import('../adapters/OllamaAdapter.js').OllamaAdapter | null} [adapter]
  * @returns {Promise<IntentResolution>}
  */
 export async function resolveIntentPermissions(task, options = {}, adapter = null) {
-	const heuristic = resolveUserIntent(task, options);
 	const mode = options.chatMode ?? 'auto';
 
-	if (mode !== 'auto' || ROUTER_MODE === 'heuristic') {
-		return heuristic;
+	const modeResult = resolveFromMode(mode, task);
+	if (modeResult) {
+		return modeResult;
 	}
 
-	// Heuristic investigate/regression always wins — LLM must not downgrade to shard-chat hallucination.
-	if (heuristic.investigate || isRegressionReport(task, options.history ?? [])) {
-		return heuristic;
-	}
-
-	const ambiguous =
-		heuristic.confidence !== 'high' ||
-		(heuristic.intent === 'edit' && isLikelyQuestion(task) && !EXPLICIT_WRITE_RE.test(task.trim()));
-
-	if (ROUTER_MODE === 'llm' || (ROUTER_MODE === 'hybrid' && ambiguous)) {
+	// Auto (+ hybrid/llm): LLM classifies intent BEFORE tools/shards — no regex scoring.
+	if (mode === 'auto' && ROUTER_MODE !== 'heuristic') {
 		if (adapter) {
 			const llmResult = await resolveWithLlm(adapter, task, options.history ?? []);
 			if (llmResult) {
-				return mergeLlmWithHeuristic(task, heuristic, llmResult);
+				return llmResult;
 			}
 		}
+		return fallbackResolution(task);
 	}
 
-	return heuristic;
+	// Legacy heuristic mode (neurocode.chat.intentRouter = heuristic) for offline debugging only.
+	return resolveUserIntent(task, options);
 }
 
 /** @deprecated Use resolveUserIntent — kept for imports */

@@ -137,13 +137,15 @@ export interface AgentChatData extends AgentAskData {
 
 /** SSE chunk from POST /agent/chat/stream or /agent/loop/stream. */
 export interface AgentChatStreamChunk {
-	type: 'intent' | 'token' | 'done' | 'error' | 'step' | 'tool_start' | 'tool_result' | 'status' | 'stream_set';
+	type: 'routing' | 'intent' | 'token' | 'done' | 'error' | 'step' | 'tool_start' | 'tool_result' | 'status' | 'stream_set';
 	intent?: ChatIntent;
 	investigate?: boolean;
 	readOnly?: boolean;
+	allowWrites?: boolean;
 	agentic?: boolean;
 	model?: string;
 	mode?: string;
+	reason?: string;
 	step?: number;
 	maxSteps?: number;
 	tool?: string;

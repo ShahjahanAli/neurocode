@@ -137,6 +137,9 @@ export async function streamAgentToolLoop(services, params, write) {
 		modelSelection = 'auto',
 		selectedModel,
 		chatMode = 'agent',
+		prefetchShards = false,
+		allowWrites = true,
+		routingReason,
 	} = params;
 
 	try {
@@ -148,15 +151,31 @@ export async function streamAgentToolLoop(services, params, write) {
 			}
 		}
 
-		const assembleResult = await services.shardManager.assembleContext(
-			task,
-			activeFile,
-			projectPath,
-			services.memoryGraph,
-			services.crossRepoIndexer,
-			attachments,
-		);
-		const { shards, totalTokens, budget, indexed, fileCount } = assembleResult;
+		let shards = [];
+		let totalTokens = 0;
+		let budget = services.shardManager.MAX_TOKENS;
+		let indexed = false;
+		let fileCount = 0;
+
+		if (prefetchShards) {
+			const assembleResult = await services.shardManager.assembleContext(
+				task,
+				activeFile,
+				projectPath,
+				services.memoryGraph,
+				services.crossRepoIndexer,
+				attachments,
+			);
+			shards = assembleResult.shards;
+			totalTokens = assembleResult.totalTokens;
+			budget = assembleResult.budget;
+			indexed = assembleResult.indexed;
+			fileCount = assembleResult.fileCount;
+		} else {
+			const row = services.db.prepare('SELECT COUNT(*) AS c FROM files').get();
+			fileCount = row?.c ?? 0;
+			indexed = fileCount > 0;
+		}
 
 		const adapter = await LLMRouter.getAdapter();
 		const models = await LLMRouter.listModels();
@@ -170,7 +189,16 @@ export async function streamAgentToolLoop(services, params, write) {
 			defaultModel: cfg.model,
 		});
 		LLMRouter.applyModel(adapter, resolvedModel);
-		write({ type: 'intent', intent: 'edit', agentic: true, mode: 'tool-loop', model: resolvedModel });
+		write({
+			type: 'intent',
+			intent: 'edit',
+			agentic: true,
+			mode: 'tool-loop',
+			model: resolvedModel,
+			allowWrites,
+			readOnly: !allowWrites,
+			reason: routingReason,
+		});
 
 		const provider = LLMRouter.getActiveProvider();
 		const modelInfo = await adapter.getModelInfo();
@@ -216,13 +244,22 @@ export async function streamAgentToolLoop(services, params, write) {
 
 			write({ type: 'tool_start', tool: toolCall.tool, args: toolCall.args });
 
+			if (toolCall.tool === 'write_file' && !allowWrites) {
+				messages.push({ role: 'assistant', content: response });
+				messages.push({
+					role: 'user',
+					content: 'write_file is not allowed for this request. Use read_file/search_code, then reply.',
+				});
+				continue;
+			}
+
 			const result = await executeAgentTool(toolCall.tool, toolCall.args, toolCtx);
 			const summary = summarizeToolResult(result);
 
 			write({ type: 'tool_result', tool: toolCall.tool, result: sanitizeForJson(summary) });
 			toolLog.push({ tool: toolCall.tool, args: toolCall.args, result: summary });
 
-			if (toolCall.tool === 'write_file' && result.success && result.staged) {
+			if (toolCall.tool === 'write_file' && result.success && result.staged && allowWrites) {
 				pendingWrites.push({
 					path: String(result.path),
 					content: String(result.content),
@@ -274,7 +311,10 @@ export async function streamAgentToolLoop(services, params, write) {
 				intent: 'edit',
 				agentic: true,
 				mode: 'tool-loop',
-				pendingWrites,
+				readOnly: !allowWrites,
+				allowWrites,
+				routingReason,
+				pendingWrites: allowWrites ? pendingWrites : [],
 				toolLog: sanitizeForJson(toolLog),
 				shardsUsed: shards.map((s) => ({
 					file: s.relativeFile,
