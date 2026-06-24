@@ -525,12 +525,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 				},
 				(chunk) => {
 					if (chunk.type === 'routing' && !isContinueRound) {
+						const exec = (chunk as { execution?: string }).execution;
+						const allowWrites = chunk.allowWrites ?? exec === 'agent';
 						this.post({
 							type: 'streamIntent',
-							intent: chunk.intent,
-							agentic: chunk.agentic,
+							intent: allowWrites || chunk.intent === 'edit' ? 'edit' : chunk.intent,
+							agentic: exec === 'agent' || chunk.agentic,
 							investigate: chunk.investigate,
-							allowWrites: chunk.allowWrites,
+							allowWrites,
 							model: chunk.model,
 							routingReason: chunk.reason,
 						});

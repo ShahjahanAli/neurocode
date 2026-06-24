@@ -146,6 +146,8 @@ export interface AgentChatStreamChunk {
 	model?: string;
 	mode?: string;
 	reason?: string;
+	execution?: string;
+	seedPaths?: string[];
 	step?: number;
 	maxSteps?: number;
 	tool?: string;

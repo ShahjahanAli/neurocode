@@ -102,12 +102,14 @@ Fields:
 - seed_paths: relative paths to read FIRST (extract from stack traces, filenames in message, component names). Empty array if unknown.
 
 Routing judgment (semantic, not keywords):
-- Pasted runtime error / stack trace → usually intent edit, allow_writes true, investigate false; put error file paths in seed_paths
-- User wants fix applied (including short follow-ups after you explained a fix) → intent edit, allow_writes true, investigate false
-- User only wants to understand why → intent chat, investigate true, allow_writes false
-- Greeting or thanks → intent chat, investigate false, allow_writes false, seed_paths []
+- Pasted runtime error / stack trace with no "why/explain only" → intent MUST be "edit", allow_writes true, investigate false; seed_paths from the error file paths
+- User wants fix applied → intent edit, allow_writes true, investigate false
+- User ONLY wants to understand why (explicit) → intent chat, allow_writes false (agent will read + explain, no writes)
+- Greeting or thanks → intent chat, allow_writes false, seed_paths []
 - Large feature / migration → intent plan
-- When unsure what files matter: seed_paths [] (worker will search); do not guess random files
+- investigate should almost always be false — Auto uses one agent; allow_writes controls disk writes
+
+CRITICAL: A pasted React/Next error without "explain why" means FIX IT (edit + allow_writes true), not explain.
 
 effective_task examples:
 - "Fix import/export mismatch for ChatInterface in app/page.tsx"
@@ -680,11 +682,13 @@ function normalizeLlmRouterOutput(parsed, task) {
 	if (intent === 'edit') {
 		investigate = false;
 		allowWrites = true;
-	} else if (investigate) {
-		allowWrites = false;
 	} else if (allowWrites) {
 		investigate = false;
+	} else if (investigate) {
+		allowWrites = false;
 	}
+
+	// Trust allow_writes from LLM; edit intent always writes
 
 	return { intent, investigate, allowWrites, effectiveTask, seedPaths };
 }

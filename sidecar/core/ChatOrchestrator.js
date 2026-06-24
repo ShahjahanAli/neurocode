@@ -247,6 +247,7 @@ function getSeedPathsFromResolution(resolved, activeFile, projectPath, services)
 
 /**
  * Pick execution path from LLM resolution (Auto) or explicit mode pill.
+ * Auto always uses the agent loop — LLM sets allow_writes; no separate investigate path.
  * @param {import('./IntentRouter.js').IntentResolution} resolved
  * @param {ChatMode} chatMode
  * @returns {'investigate' | 'plan' | 'agent' | 'chat'}
@@ -258,11 +259,13 @@ function pickExecutionPath(resolved, chatMode = 'auto') {
 	if (chatMode === 'plan' || resolved.intent === 'plan') {
 		return 'plan';
 	}
-	if (shouldUseInvestigateLoop(resolved, chatMode)) {
-		return 'investigate';
-	}
+	// Auto: one agent handles read + write; LLM decides allow_writes (no read-only investigate fork)
 	if (chatMode === 'auto') {
 		return 'agent';
+	}
+	// Ask pill only: read-only investigate loop
+	if (chatMode === 'explain' || resolved.investigate) {
+		return 'investigate';
 	}
 	if (resolved.allowWrites || resolved.intent === 'edit') {
 		return 'agent';
@@ -372,7 +375,7 @@ export async function runOrchestratedChat(services, params) {
 			selectedModel,
 			chatMode: chatMode === 'auto' ? 'implement' : chatMode,
 			prefetchShards: false,
-			allowWrites: Boolean(resolved.allowWrites),
+			allowWrites: resolved.intent === 'edit' || Boolean(resolved.allowWrites),
 			seedPaths,
 			routingReason: resolved.reason,
 		});
@@ -569,7 +572,7 @@ export async function streamOrchestratedChat(services, params, write) {
 				selectedModel,
 				chatMode: chatMode === 'auto' ? 'implement' : chatMode,
 				prefetchShards: false,
-				allowWrites: Boolean(resolved.allowWrites),
+				allowWrites: resolved.intent === 'edit' || Boolean(resolved.allowWrites),
 				seedPaths,
 				routingReason: resolved.reason,
 			}, write);

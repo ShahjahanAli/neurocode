@@ -28,6 +28,7 @@ Available tools:
 ## Rules
 - Start by reading or searching if you lack context — do not guess file contents
 - One tool call per turn; wait for the tool result before the next call
+- When the task is to FIX an error: you MUST call **write_file** with the corrected file(s) — do not only tell the user what to change
 - Prefer **write_file** for code changes (full files, not diffs)
 - End with **reply** when finished — summarize what you changed
 - Keep reply concise; list files created/updated
@@ -217,7 +218,7 @@ export async function streamAgentToolLoop(services, params, write) {
 		LLMRouter.applyModel(adapter, resolvedModel);
 		write({
 			type: 'intent',
-			intent: 'edit',
+			intent: allowWrites ? 'edit' : 'chat',
 			agentic: true,
 			mode: 'tool-loop',
 			model: resolvedModel,
