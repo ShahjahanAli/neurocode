@@ -60,6 +60,8 @@ export function safeJsonPreview(value, maxLen = 4000) {
 		const message = err instanceof Error ? err.message : 'serialize failed';
 		return JSON.stringify({ error: message });
 	}
+}
+
 /**
  * @param {unknown} value
  * @returns {string}
