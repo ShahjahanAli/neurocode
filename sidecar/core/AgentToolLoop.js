@@ -194,7 +194,7 @@ export async function streamAgentToolLoop(services, params, write) {
 			let response = '';
 			for await (const token of adapter.stream(messages, {
 				temperature: 0.1,
-				max_tokens: 2500,
+				max_tokens: LLMRouter.getMaxOutputTokens(),
 			})) {
 				response += token;
 				streamedText += token;

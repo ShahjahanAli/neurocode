@@ -78,13 +78,14 @@ export function classifyIntent(message) {
  * @returns {number}
  */
 export function getMaxTokensForIntent(intent) {
+	const cap = LLMRouter.getMaxOutputTokens();
 	if (intent === 'edit') {
-		return Math.min(4000, Math.max(2000, LLMRouter.getTokenBudget() - 500));
+		return Math.min(cap, Math.min(4000, Math.max(2000, LLMRouter.getTokenBudget() - 500)));
 	}
 	if (intent === 'chat') {
-		return 2500;
+		return Math.min(cap, 2500);
 	}
-	return 1500;
+	return Math.min(cap, 1500);
 }
 
 /**

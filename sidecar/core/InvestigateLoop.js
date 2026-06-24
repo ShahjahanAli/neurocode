@@ -170,7 +170,7 @@ async function synthesizeInvestigateReply(adapter, messages, toolLog) {
 Do NOT output tool blocks.`,
 	});
 
-	return adapter.chat(messages, { temperature: 0.3, max_tokens: 2500 });
+	return adapter.chat(messages, { temperature: 0.3, max_tokens: LLMRouter.getMaxOutputTokens() });
 }
 
 /**
@@ -255,7 +255,7 @@ export async function streamInvestigateLoop(services, params, write) {
 			let response = '';
 			for await (const token of adapter.stream(messages, {
 				temperature: 0.3,
-				max_tokens: 2500,
+				max_tokens: LLMRouter.getMaxOutputTokens(),
 			})) {
 				response += token;
 			}

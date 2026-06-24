@@ -267,6 +267,13 @@
           "default": false,
           "description": "When gateway mode is unreachable, fall back to local Ollama instead of failing."
         },
+        "neurocode.llm.maxOutputTokens": {
+          "type": "number",
+          "default": 1024,
+          "minimum": 64,
+          "maximum": 8000,
+          "description": "Max completion tokens (max_tokens) per LLM call. Lower if your gateway returns 402 insufficient credits (e.g. OpenRouter — set below your remaining credit limit)."
+        },
         "neurocode.llm.provider": {
           "type": "string",
           "enum": ["ollama", "vllm", "openai"],

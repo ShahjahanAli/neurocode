@@ -106,6 +106,12 @@ export class LLMRouter {
 		}
 	}
 
+	/** @returns {number} Max completion tokens for gateway/Ollama chat calls. */
+	static getMaxOutputTokens() {
+		const parsed = parseInt(process.env.NEUROCODE_LLM_MAX_OUTPUT_TOKENS || '1024', 10);
+		return Number.isFinite(parsed) && parsed >= 64 ? parsed : 1024;
+	}
+
 	/** @returns {number} Dynamic shard token budget based on active backend. */
 	static getTokenBudget() {
 		const manual = parseInt(process.env.SHARD_MAX_TOKENS || '0', 10);
