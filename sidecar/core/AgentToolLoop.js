@@ -1,9 +1,8 @@
 import { LLMRouter } from './LLMRouter.js';
 import { resolveModelId } from './ModelSelector.js';
-import { trimHistory } from './ChatOrchestrator.js';
 import { recordAnalyticsEvent } from './AnalyticsCollector.js';
 import { executeAgentTool, AGENT_TOOL_NAMES, isIncompleteWriteContent } from './AgentTools.js';
-import { safeJsonPreview, sanitizeForJson } from '../utils/safeJson.js';
+import { sanitizeForJson } from '../utils/safeJson.js';
 
 const AGENT_SYSTEM = `You are NeuroCode Agent — an autonomous coding assistant inside VS Code (like Cursor Agent).
 
@@ -97,34 +96,121 @@ function isToolArtifact(text) {
 	return /^\s*\{\s*"tool"\s*:\s*"(?:read_file|search_code|write_file|search_replace|reply)"/.test(trimmed);
 }
 
-const AGENT_READ_PREVIEW_CHARS = 2500;
-const AGENT_SEED_PREVIEW_CHARS = 3000;
-const AGENT_HISTORY_TURNS = 2;
+const AGENT_FILE_CACHE_PREVIEW = 1200;
+const AGENT_MAX_CACHED_FILES = 3;
+const AGENT_MAX_STEP_LOG = 8;
 
 /**
- * @param {string} content
- * @param {number} [maxLen]
- * @returns {string}
+ * @typedef {object} AgentSessionState
+ * @property {string} task
+ * @property {string[]} steps
+ * @property {Map<string, { preview: string, chars: number, corrupted?: boolean }>} files
+ * @property {string} nudge
  */
-function compactHistoryContent(content, maxLen = 500) {
-	const text = String(content ?? '');
-	if (text.length <= maxLen) {
-		return text;
-	}
-	if (isToolArtifact(text)) {
-		return '[prior agent tool turn]';
-	}
-	return `${text.slice(0, maxLen)}…`;
+
+/**
+ * @param {string} task
+ * @returns {AgentSessionState}
+ */
+function createAgentSession(task) {
+	return { task, steps: [], files: new Map(), nudge: '' };
 }
 
 /**
+ * @param {AgentSessionState} session
+ * @param {string} path
+ * @param {string} content
+ * @param {boolean} [corrupted]
+ */
+function recordFileInSession(session, path, content, corrupted = false) {
+	const rel = path.replace(/\\/g, '/').replace(/^\.\//, '');
+	session.files.delete(rel);
+	session.files.set(rel, {
+		preview: String(content).slice(0, AGENT_FILE_CACHE_PREVIEW),
+		chars: String(content).length,
+		corrupted,
+	});
+	while (session.files.size > AGENT_MAX_CACHED_FILES) {
+		const oldest = session.files.keys().next().value;
+		if (oldest) {
+			session.files.delete(oldest);
+		}
+	}
+}
+
+/**
+ * @param {AgentSessionState} session
+ * @param {string} line
+ */
+function recordSessionStep(session, line) {
+	session.steps.push(line);
+	while (session.steps.length > AGENT_MAX_STEP_LOG) {
+		session.steps.shift();
+	}
+}
+
+/**
+ * Rebuilds a bounded prompt each agent step — O(budget) not O(steps × file_size).
+ * @param {AgentSessionState} session
+ * @returns {Array<{role: string, content: string}>}
+ */
+function rebuildAgentMessages(session) {
+	const parts = [`Task: ${session.task}`];
+
+	if (session.steps.length > 0) {
+		parts.push('', 'Session log:', ...session.steps.map((s) => `- ${s}`));
+	}
+
+	if (session.files.size > 0) {
+		parts.push('', 'Cached file previews (re-call read_file if you need lines not shown):');
+		for (const [path, meta] of session.files) {
+			const flag = meta.corrupted ? ' ⚠️ CORRUPTED' : '';
+			parts.push(
+				`\n### ${path}${flag} (${meta.chars} chars)\n\`\`\`\n${meta.preview}\n\`\`\``,
+			);
+		}
+	}
+
+	if (session.nudge) {
+		parts.push('', session.nudge);
+	} else {
+		parts.push('', 'Call your next tool (search_replace for small fixes), or reply when done.');
+	}
+
+	return [
+		{ role: 'system', content: AGENT_SYSTEM },
+		{ role: 'user', content: parts.join('\n') },
+	];
+}
+
+/**
+ * Short tool feedback for the next rebuilt prompt (not appended to growing history).
  * @param {string} tool
  * @param {{ args?: Record<string, unknown> }} toolCall
+ * @param {Record<string, unknown>} result
  * @returns {string}
  */
-function compactAssistantTurn(tool, toolCall) {
-	const path = toolCall.args?.path ? String(toolCall.args.path) : '';
-	return path ? `⟪${tool}:${path}⟫` : `⟪${tool}⟫`;
+function formatToolNudge(tool, toolCall, result) {
+	const path = String(result.path ?? toolCall.args?.path ?? '?');
+
+	if (tool === 'read_file' && result.success) {
+		if (result.corrupted) {
+			return `⚠️ \`${path}\` is corrupted (tool JSON, not source). Restore valid code with write_file, then reply.`;
+		}
+		return `read_file \`${path}\` OK — preview updated above. Prefer search_replace for one-line fixes.`;
+	}
+	if (tool === 'write_file' || tool === 'search_replace') {
+		if (result.success && result.staged) {
+			return `${tool} staged for \`${path}\`. Continue or reply when done.`;
+		}
+		return `${tool} failed for \`${path}\`: ${result.error ?? 'unknown error'}. Try search_replace with exact old_text.`;
+	}
+	if (tool === 'search_code' && result.success) {
+		const hits = Array.isArray(result.hits) ? result.hits : [];
+		const lines = hits.slice(0, 4).map((h) => `- \`${h.file}\` (${h.source})`).join('\n');
+		return `search_code found ${hits.length} hit(s):\n${lines || '(none)'}\n\nread_file the best match next.`;
+	}
+	return `Tool ${tool} completed. Continue or reply.`;
 }
 
 /**
@@ -175,38 +261,6 @@ function buildAgentSummary(toolLog, pendingWrites) {
 }
 
 /**
- * @param {string} tool
- * @param {{ args?: Record<string, unknown> }} toolCall
- * @param {Record<string, unknown>} result
- * @returns {string}
- */
-function formatToolResultMessage(tool, toolCall, result) {
-	if (tool === 'read_file' && result.success && typeof result.content === 'string') {
-		const rel = String(result.path ?? toolCall.args?.path ?? '?');
-		if (isCorruptedSource(result.content)) {
-			return `⚠️ \`${rel}\` is **corrupted** — it contains agent tool JSON, not valid source code. `
-				+ `Read \`app/page.tsx\` for the correct import, then use **write_file** to restore valid TSX `
-				+ `(or **search_replace** if you know the exact broken line). `
-				+ `Do NOT leave tool-call JSON in the file.\n\n`
-				+ `Corrupt preview:\n\`\`\`\n${result.content.slice(0, 200)}\n\`\`\`\n\n`
-				+ `Fix this file next, then reply.`;
-		}
-		const body = result.content.slice(0, AGENT_READ_PREVIEW_CHARS);
-		const suffix = result.truncated || result.content.length > AGENT_READ_PREVIEW_CHARS
-			? ` (showing ${body.length}/${result.content.length} chars)`
-			: '';
-		return `read_file \`${rel}\`${suffix}:\n\`\`\`\n${body}\n\`\`\`\n\nContinue with the next tool, or reply when done.`;
-	}
-	if (tool === 'write_file' || tool === 'search_replace') {
-		if (result.success && result.staged) {
-			return `${tool} staged \`${result.path}\`. Continue or reply when done.`;
-		}
-		return `${tool} failed: ${result.error ?? 'unknown error'}. Try search_replace for a smaller edit.`;
-	}
-	return `Tool result (${tool}):\n\`\`\`json\n${safeJsonPreview(summarizeToolResult(result))}\n\`\`\`\n\nContinue with the next tool call, or reply when done.`;
-}
-
-/**
  * @param {string} response
  * @returns {boolean}
  */
@@ -254,10 +308,11 @@ function summarizeToolResult(result) {
 /**
  * @param {string[]} seedPaths
  * @param {object} toolCtx
+ * @param {AgentSessionState} session
  * @param {(event: object) => void} write
  * @returns {Promise<Array<{ path: string, result: Record<string, unknown> }>>}
  */
-async function seedAgentFiles(seedPaths, toolCtx, write) {
+async function seedAgentFiles(seedPaths, toolCtx, session, write) {
 	const seeded = [];
 	for (const rel of seedPaths.slice(0, 4)) {
 		write({ type: 'status', content: `_Reading \`${rel}\`…` });
@@ -265,43 +320,13 @@ async function seedAgentFiles(seedPaths, toolCtx, write) {
 		const result = await executeAgentTool('read_file', { path: rel, max_chars: 5000 }, toolCtx);
 		write({ type: 'tool_result', tool: 'read_file', result: summarizeToolResult(result) });
 		if (result.success) {
+			const corrupt = isCorruptedSource(result.content);
+			recordFileInSession(session, rel, String(result.content ?? ''), corrupt);
+			recordSessionStep(session, `read \`${rel}\` (${String(result.content ?? '').length} chars)${corrupt ? ' [corrupted]' : ''}`);
 			seeded.push({ path: rel, result });
 		}
 	}
 	return seeded;
-}
-
-/**
- * @param {string} task
- * @param {Array} shards
- * @param {Array<{role: string, content: string}>} history
- * @param {Array<{ path: string, result: Record<string, unknown> }>} [seeded]
- * @returns {Array<{role: string, content: string}>}
- */
-function buildAgentMessages(task, shards, history, seeded = []) {
-	const seedBlock = seeded.length
-		? seeded.map((s) => `// ${s.path} (from error location)\n${String(s.result.content ?? '').slice(0, AGENT_SEED_PREVIEW_CHARS)}`).join('\n\n')
-		: '';
-	const contextBlock = seedBlock
-		|| '(no files pre-loaded — use read_file on 1–2 relevant paths from the error)';
-
-	const messages = [{ role: 'system', content: AGENT_SYSTEM }];
-
-	for (const turn of trimHistory(history, AGENT_HISTORY_TURNS)) {
-		if (turn.role === 'user' || turn.role === 'assistant') {
-			messages.push({
-				role: turn.role,
-				content: compactHistoryContent(turn.content),
-			});
-		}
-	}
-
-	messages.push({
-		role: 'user',
-		content: `Task: ${task}\n\n${seedBlock ? `Relevant file preview:\n${contextBlock}\n\n` : ''}Call your first tool (read_file for context, search_replace for small fixes, write_file only if rewriting most of a file).`,
-	});
-
-	return messages;
 }
 
 /**
@@ -401,8 +426,10 @@ export async function streamAgentToolLoop(services, params, write) {
 			vectorStore: services.vectorStore,
 		};
 
+		const session = createAgentSession(task);
+
 		const seeded = seedPaths.length > 0
-			? await seedAgentFiles(seedPaths, toolCtx, write)
+			? await seedAgentFiles(seedPaths, toolCtx, session, write)
 			: [];
 		const seedShards = seeded.map((s) => ({
 			relativeFile: s.path,
@@ -410,12 +437,13 @@ export async function streamAgentToolLoop(services, params, write) {
 			tokenCount: Math.ceil(String(s.result.content ?? '').length / 4),
 		}));
 
-		const messages = buildAgentMessages(task, shards, history, seeded);
-
 		const agentMaxTokens = LLMRouter.getAgentOutputTokens();
 
 		for (let step = 0; step < maxSteps; step++) {
 			write({ type: 'step', step: step + 1, maxSteps });
+
+			const messages = rebuildAgentMessages(session);
+			session.nudge = '';
 
 			let response = '';
 			for await (const token of adapter.stream(messages, {
@@ -426,11 +454,7 @@ export async function streamAgentToolLoop(services, params, write) {
 			}
 
 			if (isTruncatedToolResponse(response)) {
-				messages.push({ role: 'assistant', content: '[Truncated tool output]' });
-				messages.push({
-					role: 'user',
-					content: 'Your last response was cut off (output token limit). Use search_replace for small edits instead of write_file, then reply.',
-				});
+				session.nudge = 'Your last response was cut off (output token limit). Use search_replace for small edits, then reply.';
 				continue;
 			}
 
@@ -438,13 +462,9 @@ export async function streamAgentToolLoop(services, params, write) {
 
 			if (!toolCall) {
 				if (isToolArtifact(response) || isInternalAgentEcho(response)) {
-					messages.push({ role: 'assistant', content: '⟪invalid-echo⟫' });
-					messages.push({
-						role: 'user',
-						content: isInternalAgentEcho(response)
-							? 'Do not echo internal tool labels. Call the next tool: read corrupted files, search_replace or write_file to fix, then reply.'
-							: 'Respond with exactly one ```neurocode-tool``` block containing valid JSON for a single tool call.',
-					});
+					session.nudge = isInternalAgentEcho(response)
+						? 'Do not echo session labels. Call the next tool, then reply when done.'
+						: 'Respond with exactly one ```neurocode-tool``` block containing valid JSON for a single tool call.';
 					continue;
 				}
 				finalReply = response.trim();
@@ -456,6 +476,7 @@ export async function streamAgentToolLoop(services, params, write) {
 				finalReply = String(toolCall.args.message ?? response).trim();
 				displayReply = cleanDisplayReply(finalReply);
 				toolLog.push({ tool: 'reply', args: toolCall.args });
+				recordSessionStep(session, 'reply');
 				break;
 			}
 
@@ -463,22 +484,15 @@ export async function streamAgentToolLoop(services, params, write) {
 				toolCall.tool === 'write_file'
 				&& isIncompleteWriteContent(String(toolCall.args.content ?? ''), String(toolCall.args.path ?? ''))
 			) {
-				messages.push({ role: 'assistant', content: compactAssistantTurn(toolCall.tool, toolCall) });
-				messages.push({
-					role: 'user',
-					content: 'write_file content is incomplete or truncated. Use search_replace with old_text/new_text for the minimal fix.',
-				});
+				session.nudge = 'write_file content is incomplete. Use search_replace with old_text/new_text for the minimal fix.';
+				recordSessionStep(session, `write_file \`${toolCall.args.path}\` rejected (truncated)`);
 				continue;
 			}
 
 			write({ type: 'tool_start', tool: toolCall.tool, args: toolCall.args });
 
 			if ((toolCall.tool === 'write_file' || toolCall.tool === 'search_replace') && !allowWrites) {
-				messages.push({ role: 'assistant', content: compactAssistantTurn(toolCall.tool, toolCall) });
-				messages.push({
-					role: 'user',
-					content: 'File writes are not allowed for this request. Use read_file/search_code, then reply.',
-				});
+				session.nudge = 'File writes are not allowed. Use read_file/search_code, then reply.';
 				continue;
 			}
 
@@ -492,6 +506,28 @@ export async function streamAgentToolLoop(services, params, write) {
 			toolLog.push({ tool: toolCall.tool, args: toolCall.args, result: summary });
 
 			const pathLabel = toolCall.args?.path ? String(toolCall.args.path) : '';
+
+			if (toolCall.tool === 'read_file' && result.success && pathLabel) {
+				recordFileInSession(
+					session,
+					pathLabel,
+					String(result.content ?? ''),
+					Boolean(result.corrupted),
+				);
+				recordSessionStep(
+					session,
+					`read \`${pathLabel}\` (${String(result.content ?? '').length} chars)${result.corrupted ? ' [corrupted]' : ''}`,
+				);
+			} else if (toolCall.tool === 'search_code') {
+				const hitCount = Array.isArray(result.hits) ? result.hits.length : 0;
+				recordSessionStep(session, `search_code "${String(toolCall.args?.query ?? '')}" (${hitCount} hits)`);
+			} else if ((toolCall.tool === 'write_file' || toolCall.tool === 'search_replace') && pathLabel) {
+				recordSessionStep(
+					session,
+					`${toolCall.tool} \`${pathLabel}\`${result.success ? '' : ' failed'}`,
+				);
+			}
+
 			if (toolCall.tool === 'read_file' && pathLabel) {
 				write({
 					type: 'status',
@@ -520,11 +556,7 @@ export async function streamAgentToolLoop(services, params, write) {
 				});
 			}
 
-			messages.push({ role: 'assistant', content: compactAssistantTurn(toolCall.tool, toolCall) });
-			messages.push({
-				role: 'user',
-				content: formatToolResultMessage(toolCall.tool, toolCall, result),
-			});
+			session.nudge = formatToolNudge(toolCall.tool, toolCall, result);
 		}
 
 		if (!finalReply && pendingWrites.length > 0) {
