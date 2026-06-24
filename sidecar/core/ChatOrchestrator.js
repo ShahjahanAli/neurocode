@@ -216,27 +216,58 @@ function shouldUseInvestigateLoop(resolved, chatMode = 'auto') {
 	if (resolved.intent === 'edit' && resolved.allowWrites) {
 		return false;
 	}
-	return (
-		(resolved.investigate || chatMode === 'explain') &&
-		!resolved.agentic &&
-		resolved.intent !== 'plan'
-	);
+	if (chatMode === 'explain') {
+		return resolved.intent !== 'plan';
+	}
+	return Boolean(resolved.investigate) && resolved.intent !== 'plan';
 }
 
 /**
- * Cursor-style agent loop: read → search → write when the LLM router grants writes.
+ * Seed files from LLM router output only (no regex extraction).
  * @param {import('./IntentRouter.js').IntentResolution} resolved
- * @param {ChatMode} [chatMode]
- * @returns {boolean}
+ * @param {string | undefined} activeFile
+ * @param {string} projectPath
+ * @param {import('./services.js').services} services
+ * @returns {string[]}
  */
-function shouldUseAgentToolLoop(resolved, chatMode = 'auto') {
-	if (resolved.agentic || chatMode === 'agent') {
-		return true;
+function getSeedPathsFromResolution(resolved, activeFile, projectPath, services) {
+	const paths = [...(resolved.seedPaths ?? [])];
+	if (activeFile && paths.length === 0) {
+		try {
+			const rel = services.shardManager._rel(activeFile, projectPath);
+			if (rel) {
+				paths.push(rel);
+			}
+		} catch {
+			// ignore
+		}
 	}
-	if (chatMode === 'implement') {
-		return true;
+	return [...new Set(paths.map((p) => p.replace(/\\/g, '/')))].slice(0, 6);
+}
+
+/**
+ * Pick execution path from LLM resolution (Auto) or explicit mode pill.
+ * @param {import('./IntentRouter.js').IntentResolution} resolved
+ * @param {ChatMode} chatMode
+ * @returns {'investigate' | 'plan' | 'agent' | 'chat'}
+ */
+function pickExecutionPath(resolved, chatMode = 'auto') {
+	if (chatMode === 'agent' || chatMode === 'implement' || resolved.agentic) {
+		return 'agent';
 	}
-	return resolved.intent === 'edit' && resolved.allowWrites && !resolved.investigate;
+	if (chatMode === 'plan' || resolved.intent === 'plan') {
+		return 'plan';
+	}
+	if (shouldUseInvestigateLoop(resolved, chatMode)) {
+		return 'investigate';
+	}
+	if (chatMode === 'auto') {
+		return 'agent';
+	}
+	if (resolved.allowWrites || resolved.intent === 'edit') {
+		return 'agent';
+	}
+	return 'chat';
 }
 
 /**
@@ -298,9 +329,17 @@ export async function runOrchestratedChat(services, params) {
 	const resolved = await resolveIntentWithContext(task, forceIntent, [], history, {
 		chatMode,
 		fixOnCheck: false,
+		history,
 	}, routerAdapter);
 
-	if (shouldUseInvestigateLoop(resolved, chatMode)) {
+	const execution = pickExecutionPath(resolved, chatMode);
+	const seedPaths = getSeedPathsFromResolution(resolved, activeFile, projectPath, services);
+
+	console.log(
+		`[ChatOrchestrator] llm-route mode=${chatMode} execution=${execution} intent=${resolved.intent} writes=${resolved.allowWrites} seeds=${seedPaths.join(',') || 'none'} reason=${resolved.reason}`,
+	);
+
+	if (execution === 'investigate') {
 		let investigateData;
 		await streamInvestigateLoop(services, {
 			task: resolved.effectiveTask,
@@ -312,6 +351,7 @@ export async function runOrchestratedChat(services, params) {
 			selectedModel,
 			chatMode,
 			prefetchShards: false,
+			seedPaths,
 			routingReason: resolved.reason,
 		}, (event) => {
 			if (event.type === 'done') {
@@ -321,7 +361,7 @@ export async function runOrchestratedChat(services, params) {
 		return investigateData ?? { response: 'Investigation failed.', intent: 'chat' };
 	}
 
-	if (shouldUseAgentToolLoop(resolved, chatMode)) {
+	if (execution === 'agent') {
 		return runAgentToolLoopCollect(services, {
 			task: resolved.effectiveTask,
 			activeFile,
@@ -332,7 +372,8 @@ export async function runOrchestratedChat(services, params) {
 			selectedModel,
 			chatMode: chatMode === 'auto' ? 'implement' : chatMode,
 			prefetchShards: false,
-			allowWrites: resolved.allowWrites,
+			allowWrites: Boolean(resolved.allowWrites),
+			seedPaths,
 			routingReason: resolved.reason,
 		});
 	}
@@ -360,7 +401,7 @@ export async function runOrchestratedChat(services, params) {
 	let planId;
 	let steps;
 
-	if (effectiveIntent === 'plan') {
+	if (effectiveIntent === 'plan' || execution === 'plan') {
 		const plan = await createPlan(services, task, shards, projectPath);
 		planId = plan.planId;
 		steps = plan.steps;
@@ -479,7 +520,15 @@ export async function streamOrchestratedChat(services, params, write) {
 		const resolved = await resolveIntentWithContext(task, forceIntent, [], history, {
 			chatMode,
 			fixOnCheck: false,
+			history,
 		}, routerAdapter);
+
+		const execution = pickExecutionPath(resolved, chatMode);
+		const seedPaths = getSeedPathsFromResolution(resolved, activeFile, projectPath, services);
+
+		console.log(
+			`[ChatOrchestrator] llm-route mode=${chatMode} execution=${execution} intent=${resolved.intent} writes=${resolved.allowWrites} seeds=${seedPaths.join(',') || 'none'} reason=${resolved.reason}`,
+		);
 
 		write({
 			type: 'routing',
@@ -489,9 +538,11 @@ export async function streamOrchestratedChat(services, params, write) {
 			readOnly: resolved.readOnly,
 			allowWrites: resolved.allowWrites,
 			reason: resolved.reason,
+			seedPaths,
+			execution,
 		});
 
-		if (shouldUseInvestigateLoop(resolved, chatMode)) {
+		if (execution === 'investigate') {
 			return streamInvestigateLoop(services, {
 				task: resolved.effectiveTask,
 				activeFile,
@@ -502,11 +553,12 @@ export async function streamOrchestratedChat(services, params, write) {
 				selectedModel,
 				chatMode,
 				prefetchShards: false,
+				seedPaths,
 				routingReason: resolved.reason,
 			}, write);
 		}
 
-		if (shouldUseAgentToolLoop(resolved, chatMode)) {
+		if (execution === 'agent') {
 			return streamAgentToolLoop(services, {
 				task: resolved.effectiveTask,
 				activeFile,
@@ -517,7 +569,8 @@ export async function streamOrchestratedChat(services, params, write) {
 				selectedModel,
 				chatMode: chatMode === 'auto' ? 'implement' : chatMode,
 				prefetchShards: false,
-				allowWrites: resolved.allowWrites,
+				allowWrites: Boolean(resolved.allowWrites),
+				seedPaths,
 				routingReason: resolved.reason,
 			}, write);
 		}
@@ -557,7 +610,7 @@ export async function streamOrchestratedChat(services, params, write) {
 		let planId;
 		let steps;
 
-		if (effectiveIntent === 'plan') {
+		if (effectiveIntent === 'plan' || execution === 'plan') {
 			const plan = await createPlan(services, task, shards, projectPath);
 			planId = plan.planId;
 			steps = plan.steps;

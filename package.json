@@ -479,7 +479,7 @@
           "type": "string",
           "enum": ["heuristic", "hybrid", "llm"],
           "default": "llm",
-          "description": "Auto mode intent routing: llm (Cursor-style — LLM classifies every message before tools; recommended). hybrid/llm are equivalent. heuristic = legacy regex (debug only)."
+          "description": "Auto mode uses LLM only to understand each message (no regex). Set heuristic for legacy offline debug only."
         },
         "neurocode.chat.investigateMaxSteps": {
           "type": "number",

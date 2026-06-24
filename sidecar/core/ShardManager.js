@@ -8,6 +8,7 @@ import { CHAT_SYSTEM, trimHistory } from './ChatOrchestrator.js';
 import {
 	buildReviewNotes,
 	extractFileHintFromTask,
+	extractStackTracePaths,
 	isFileReviewTask,
 	resolveTaskFilePath,
 	REVIEW_FILE_RULES,
@@ -33,6 +34,88 @@ export class ShardManager {
 			return manual;
 		}
 		return LLMRouter.getTokenBudget();
+	}
+
+	get MAX_FILES() {
+		return parseInt(process.env.NEUROCODE_MAX_FILES || '8', 10);
+	}
+
+	/**
+	 * @param {Array} shards
+	 * @param {number} [max]
+	 * @returns {Array}
+	 */
+	_trimShards(shards, max = this.MAX_FILES) {
+		const sorted = [...shards].sort((a, b) => (a.priority ?? 9) - (b.priority ?? 9));
+		return sorted.slice(0, max);
+	}
+
+	/**
+	 * Error-focused context: only files named in the stack trace.
+	 * @param {string} task
+	 * @param {string | undefined} activeFile
+	 * @param {string} projectPath
+	 * @param {Array<{ path: string, line?: number }>} errorLocs
+	 * @param {Array} attachedFiles
+	 * @returns {Promise<object>}
+	 */
+	async _assembleErrorFocused(task, activeFile, projectPath, errorLocs, attachedFiles = []) {
+		const shards = [];
+		let budget = this.MAX_TOKENS;
+		const seen = new Set();
+
+		const addFile = async (absPath, reason, priority = 0) => {
+			if (!absPath || seen.has(absPath) || !fs.existsSync(absPath)) {
+				return;
+			}
+			seen.add(absPath);
+			const content = await this._readFile(absPath);
+			const tokens = Math.min(this.countTokens(content), budget - 200, 3200);
+			shards.push({
+				file: absPath,
+				relativeFile: this._rel(absPath, projectPath),
+				content: content.slice(0, tokens * 4),
+				reason,
+				tokenCount: tokens,
+				priority,
+			});
+			budget -= tokens;
+		};
+
+		for (const loc of errorLocs.slice(0, 3)) {
+			const abs = resolveTaskFilePath(loc.path, projectPath, this.db);
+			if (abs) {
+				const lineLabel = loc.line ? ` (line ${loc.line})` : '';
+				await addFile(abs, `error location${lineLabel}`, 0);
+			}
+		}
+
+		if (activeFile && fs.existsSync(activeFile)) {
+			await addFile(activeFile, 'active file', 1);
+		}
+
+		if (Array.isArray(attachedFiles)) {
+			for (const att of attachedFiles.slice(0, 2)) {
+				const rel = String(att.path ?? '').replace(/\\/g, '/');
+				if (!rel) {
+					continue;
+				}
+				const abs = path.isAbsolute(rel) ? rel : path.resolve(projectPath, rel);
+				await addFile(abs, 'attached file', 0);
+			}
+		}
+
+		const trimmed = this._trimShards(shards, Math.max(3, Math.min(errorLocs.length + 1, 4)));
+
+		return {
+			shards: trimmed,
+			totalTokens: trimmed.reduce((sum, s) => sum + (s.tokenCount ?? 0), 0),
+			budget: this.MAX_TOKENS,
+			provider: LLMRouter.getActiveProvider(),
+			indexed: this._getIndexedFileCount(projectPath) > 0,
+			fileCount: this._getIndexedFileCount(projectPath),
+			focused: true,
+		};
 	}
 
 	/**
@@ -165,7 +248,14 @@ Format for each file:
 	 * @param {import('./CrossRepoIndexer.js').CrossRepoIndexer | null} crossRepoIndexer
 	 * @param {Array<{path: string, kind: string, content?: string, lineStart?: number, lineEnd?: number}>} [attachedFiles]
 	 */
-	async assembleContext(task, activeFile, projectPath, memoryGraph = null, crossRepoIndexer = null, attachedFiles = []) {
+	async assembleContext(task, activeFile, projectPath, memoryGraph = null, crossRepoIndexer = null, attachedFiles = [], options = {}) {
+		const errorLocs = extractStackTracePaths(task);
+		const focused = options.focused ?? errorLocs.length > 0;
+
+		if (focused && errorLocs.length > 0) {
+			return this._assembleErrorFocused(task, activeFile, projectPath, errorLocs, attachedFiles);
+		}
+
 		const shards = [];
 		let budget = this.MAX_TOKENS;
 		const reviewTask = isFileReviewTask(task);
@@ -390,9 +480,11 @@ Format for each file:
 
 		await this._bootstrapProjectContext(task, projectPath, shards, budget);
 
+		const trimmed = this._trimShards(shards);
+
 		return {
-			shards,
-			totalTokens: this.MAX_TOKENS - budget,
+			shards: trimmed,
+			totalTokens: trimmed.reduce((sum, s) => sum + (s.tokenCount ?? 0), 0),
 			budget: this.MAX_TOKENS,
 			provider: LLMRouter.getActiveProvider(),
 			indexed: this._getIndexedFileCount(projectPath) > 0,

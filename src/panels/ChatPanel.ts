@@ -530,6 +530,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 							intent: chunk.intent,
 							agentic: chunk.agentic,
 							investigate: chunk.investigate,
+							allowWrites: chunk.allowWrites,
 							model: chunk.model,
 							routingReason: chunk.reason,
 						});
@@ -540,6 +541,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 							intent: chunk.intent,
 							agentic: chunk.agentic,
 							investigate: chunk.investigate,
+							allowWrites: (chunk as { allowWrites?: boolean }).allowWrites,
 							model: chunk.model,
 							routingReason: (chunk as { reason?: string }).reason,
 						});

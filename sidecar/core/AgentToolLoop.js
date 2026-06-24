@@ -94,15 +94,40 @@ function summarizeToolResult(result) {
 }
 
 /**
+ * @param {string[]} seedPaths
+ * @param {object} toolCtx
+ * @param {(event: object) => void} write
+ * @returns {Promise<Array<{ path: string, result: Record<string, unknown> }>>}
+ */
+async function seedAgentFiles(seedPaths, toolCtx, write) {
+	const seeded = [];
+	for (const rel of seedPaths.slice(0, 4)) {
+		write({ type: 'status', content: `_Reading \`${rel}\`…` });
+		write({ type: 'tool_start', tool: 'read_file', args: { path: rel } });
+		const result = await executeAgentTool('read_file', { path: rel, max_chars: 14_000 }, toolCtx);
+		write({ type: 'tool_result', tool: 'read_file', result: summarizeToolResult(result) });
+		if (result.success) {
+			seeded.push({ path: rel, result });
+		}
+	}
+	return seeded;
+}
+
+/**
  * @param {string} task
  * @param {Array} shards
  * @param {Array<{role: string, content: string}>} history
+ * @param {Array<{ path: string, result: Record<string, unknown> }>} [seeded]
  * @returns {Array<{role: string, content: string}>}
  */
-function buildAgentMessages(task, shards, history) {
-	const contextBlock = shards.length
-		? shards.map((s) => `// ${s.relativeFile} (${s.reason})\n${s.content}`).join('\n\n')
-		: '(no files pre-loaded — use read_file or search_code)';
+function buildAgentMessages(task, shards, history, seeded = []) {
+	const seedBlock = seeded.length
+		? seeded.map((s) => `// ${s.path} (from error location)\n${String(s.result.content ?? '').slice(0, 12_000)}`).join('\n\n')
+		: '';
+	const contextBlock = seedBlock
+		|| (shards.length
+			? shards.map((s) => `// ${s.relativeFile} (${s.reason})\n${s.content}`).join('\n\n')
+			: '(no files pre-loaded — use read_file or search_code)');
 
 	const messages = [{ role: 'system', content: AGENT_SYSTEM }];
 
@@ -114,7 +139,7 @@ function buildAgentMessages(task, shards, history) {
 
 	messages.push({
 		role: 'user',
-		content: `Project context (preview):\n${contextBlock}\n\nTask: ${task}\n\nCall your first tool.`,
+		content: `Project context (preview):\n${contextBlock}\n\nTask: ${task}\n\nCall your first tool (read_file if you need more context, write_file to fix, reply when done).`,
 	});
 
 	return messages;
@@ -140,6 +165,7 @@ export async function streamAgentToolLoop(services, params, write) {
 		prefetchShards = false,
 		allowWrites = true,
 		routingReason,
+		seedPaths = [],
 	} = params;
 
 	try {
@@ -204,7 +230,6 @@ export async function streamAgentToolLoop(services, params, write) {
 		const modelInfo = await adapter.getModelInfo();
 		const startTime = Date.now();
 
-		const messages = buildAgentMessages(task, shards, history);
 		const pendingWrites = [];
 		const toolLog = [];
 		let finalReply = '';
@@ -215,6 +240,17 @@ export async function streamAgentToolLoop(services, params, write) {
 			db: services.db,
 			vectorStore: services.vectorStore,
 		};
+
+		const seeded = seedPaths.length > 0
+			? await seedAgentFiles(seedPaths, toolCtx, write)
+			: [];
+		const seedShards = seeded.map((s) => ({
+			relativeFile: s.path,
+			reason: 'error location',
+			tokenCount: Math.ceil(String(s.result.content ?? '').length / 4),
+		}));
+
+		const messages = buildAgentMessages(task, shards, history, seeded);
 
 		for (let step = 0; step < maxSteps; step++) {
 			write({ type: 'step', step: step + 1, maxSteps });
@@ -316,7 +352,7 @@ export async function streamAgentToolLoop(services, params, write) {
 				routingReason,
 				pendingWrites: allowWrites ? pendingWrites : [],
 				toolLog: sanitizeForJson(toolLog),
-				shardsUsed: shards.map((s) => ({
+				shardsUsed: (seedShards.length ? seedShards : shards).map((s) => ({
 					file: s.relativeFile,
 					reason: s.reason,
 					tokenCount: s.tokenCount,

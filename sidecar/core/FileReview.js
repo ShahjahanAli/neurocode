@@ -35,6 +35,67 @@ export function extractFileHintFromTask(task) {
 }
 
 /**
+ * Paths and line numbers from pasted stack traces / Next.js error overlays.
+ * @param {string} task
+ * @returns {Array<{ path: string, line?: number }>}
+ */
+export function extractStackTracePaths(task) {
+	if (!task || typeof task !== 'string') {
+		return [];
+	}
+
+	const found = new Map();
+
+	const add = (rawPath, line) => {
+		const path = rawPath.replace(/\\/g, '/').replace(/^\.\//, '').trim();
+		if (!path || !/\.\w+$/.test(path)) {
+			return;
+		}
+		const existing = found.get(path);
+		if (!existing || (line && !existing.line)) {
+			found.set(path, { path, line: line || existing?.line });
+		}
+	};
+
+	const patterns = [
+		/([\w./\\-]+\.(?:tsx?|jsx?))\s*[:(]\s*(\d+)/gi,
+		/([\w./\\-]+\.(?:tsx?|jsx?)):(\d+)(?::\d+)?/gi,
+	];
+
+	for (const pattern of patterns) {
+		let match;
+		while ((match = pattern.exec(task)) !== null) {
+			const rel = match[1].replace(/\\/g, '/').replace(/\/+/g, '/').replace(/^\.\//, '');
+			const line = parseInt(match[2], 10);
+			add(rel, Number.isFinite(line) ? line : undefined);
+		}
+	}
+
+	const jsxComponent = task.match(/<([A-Z][A-Za-z0-9_]*)/);
+	if (jsxComponent?.[1] && found.size < 4) {
+		const name = jsxComponent[1];
+		add(`components/chat/${name}.tsx`);
+		add(`components/chat/${name.toLowerCase()}.tsx`);
+	}
+
+	return [...found.values()];
+}
+
+/**
+ * @param {string} task
+ * @param {Array<{ path: string, line?: number }>} locations
+ * @returns {string}
+ */
+export function buildErrorFixTask(task, locations = []) {
+	const paths = locations.map((l) => (l.line ? `${l.path}:${l.line}` : l.path));
+	const fileList = paths.length ? paths.join(', ') : 'files mentioned in the error';
+	return `Fix this error. Start by reading ONLY these files: ${fileList}. Then apply the minimal code fix with write_file.
+
+Error / request:
+${task.slice(0, 2500)}`;
+}
+
+/**
  * @param {string} hint
  * @param {string} projectPath
  * @param {import('node:sqlite').DatabaseSync} db

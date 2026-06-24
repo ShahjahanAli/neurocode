@@ -191,6 +191,7 @@ export async function streamInvestigateLoop(services, params, write) {
 		chatMode = 'auto',
 		prefetchShards = false,
 		routingReason,
+		seedPaths = [],
 	} = params;
 
 	const maxSteps = parseInt(process.env.NEUROCODE_INVESTIGATE_MAX_STEPS || '8', 10);
@@ -258,6 +259,15 @@ export async function streamInvestigateLoop(services, params, write) {
 
 		const prefetched = [];
 		const toolLog = [];
+
+		for (const rel of seedPaths.slice(0, 3)) {
+			write({ type: 'status', content: `_Investigating_ — reading \`${rel}\`…` });
+			const result = await executeAgentTool('read_file', { path: rel, max_chars: 14_000 }, toolCtx);
+			if (result.success) {
+				prefetched.push({ path: rel, result });
+				toolLog.push({ tool: 'read_file', args: { path: rel }, result: summarizeToolResult(result), prefetch: true });
+			}
+		}
 
 		const messages = buildInvestigateMessages(task, shards, history, prefetched);
 		let finalReply = '';

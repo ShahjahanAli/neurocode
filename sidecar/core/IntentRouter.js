@@ -16,6 +16,7 @@ import {
  * @property {boolean} readOnly — no disk writes / auto-apply
  * @property {boolean} allowWrites — write_file + auto-apply allowed
  * @property {boolean} investigate — read-only tool loop (read/search/reply)
+ * @property {string[]} [seedPaths] — files LLM identified to read first (from errors, etc.)
  * @property {'high' | 'medium' | 'low'} confidence
  * @property {string} [reason]
  */
@@ -74,8 +75,11 @@ const OPTION_PICK_RE =
 
 const ROUTER_MODE = (process.env.NEUROCODE_INTENT_ROUTER || 'llm').toLowerCase();
 
-const LLM_ROUTER_PROMPT = `You are the intent router for NeuroCode — a Cursor-style AI coding assistant in VS Code.
-Classify the user's latest message using conversation context. This runs BEFORE any tools, file reads, or code writes.
+const LLM_ROUTER_PROMPT = `You are the understanding layer for NeuroCode — a Cursor-style AI coding assistant in VS Code.
+
+Your ONLY job: read what the user actually sent (plain text, pasted errors, stack traces, code snippets, single words, follow-ups, silence-worthy context) and decide what should happen next. No keyword matching — use judgment.
+
+This runs BEFORE any tools, file reads, or code writes.
 
 Return ONLY valid JSON (no markdown fences):
 {
@@ -83,40 +87,32 @@ Return ONLY valid JSON (no markdown fences):
   "investigate": boolean,
   "allow_writes": boolean,
   "effective_task": string,
+  "seed_paths": string[],
   "confidence": number,
   "reason": string
 }
 
-Field meanings:
-- intent "chat": explain, discuss, answer questions
-- intent "plan": multi-step feature/refactor roadmap (no code writes yet)
-- intent "edit": produce code changes
-- investigate true: use read-only tools first (read_file, search) — debug/trace errors, inspect config/env, understand before acting
-- allow_writes true: agent may write/apply files to disk (implement mode)
-- effective_task: one clear instruction for the worker (include filenames from stack traces when present)
+Fields:
+- intent "chat": discuss, explain, answer (no code changes)
+- intent "plan": multi-step roadmap (no writes yet)
+- intent "edit": user needs code changed in the project
+- investigate true: read-only exploration first (why/debug/trace — use read_file/search, no writes)
+- allow_writes true: agent may write files to disk
+- effective_task: one clear instruction for the worker (what to do, not how you decided)
+- seed_paths: relative paths to read FIRST (extract from stack traces, filenames in message, component names). Empty array if unknown.
 
-Cursor-style routing (use judgment, not keywords):
-- User wants a fix applied ("fix", "solve", "you update", "you do it", "why should I change" after you suggested a fix) → intent edit, allow_writes true, investigate false — agent will read files then write
-- User pasted an error/stack trace and wants it resolved → intent edit, allow_writes true, investigate false unless they only ask "why" or "explain"
-- User asks why/how/debug/env/payload/check (no fix requested) → intent chat, investigate true, allow_writes false — read-only tool loop
-- Greeting/thanks/small talk → intent chat, investigate false, allow_writes false — brief friendly reply, no tools
-- Large feature / migration / "build X like Y" → intent plan, investigate false, allow_writes false
-- When ambiguous: investigate true if reading code first helps; allow_writes true only when user clearly wants changes applied
+Routing judgment (semantic, not keywords):
+- Pasted runtime error / stack trace → usually intent edit, allow_writes true, investigate false; put error file paths in seed_paths
+- User wants fix applied (including short follow-ups after you explained a fix) → intent edit, allow_writes true, investigate false
+- User only wants to understand why → intent chat, investigate true, allow_writes false
+- Greeting or thanks → intent chat, investigate false, allow_writes false, seed_paths []
+- Large feature / migration → intent plan
+- When unsure what files matter: seed_paths [] (worker will search); do not guess random files
 
-## CRITICAL follow-up rule
-If the assistant already diagnosed a bug and suggested a concrete code change, and the user now says anything like solve, resolve, fix, apply, implement, "do it", "you fix", or "resolve this" — you MUST return intent "edit", investigate false, allow_writes true. Never return chat/explain for those messages.
-
-## Examples
-User: [React error: Element type is invalid... app/page.tsx ChatInterface]
-→ {"intent":"edit","investigate":false,"allow_writes":true,"effective_task":"Fix ChatInterface import/export mismatch in app/page.tsx","confidence":0.9,"reason":"error needs code fix"}
-
-User: "solve this issue" (assistant previously said change default import in app/page.tsx)
-→ {"intent":"edit","investigate":false,"allow_writes":true,"effective_task":"Change app/page.tsx to default-import ChatInterface from @/components/chat/ChatInterface","confidence":0.95,"reason":"user wants fix applied"}
-
-User: "why does this error happen?"
-→ {"intent":"chat","investigate":true,"allow_writes":false,"effective_task":"Explain root cause of Element type invalid error","confidence":0.9,"reason":"diagnosis only"}
-
-effective_task must be actionable (bad: "help user"; good: "Fix import/export mismatch between app/page.tsx and ChatInterface").`;
+effective_task examples:
+- "Fix import/export mismatch for ChatInterface in app/page.tsx"
+- "Explain why Element type is invalid in app/page.tsx"
+- "Say hello briefly"`;
 
 /**
  * @param {string} message
@@ -438,6 +434,7 @@ function finalizeResolution(partial) {
 		intent: partial.intent,
 		effectiveTask: partial.effectiveTask,
 		reason: partial.reason,
+		seedPaths: partial.seedPaths ?? [],
 	};
 }
 
@@ -661,30 +658,9 @@ function fallbackResolution(task) {
 }
 
 /**
- * User pasted a runtime/stack error — treat as fix request unless they only ask why.
- * @param {string} message
- * @returns {boolean}
- */
-function isPastedRuntimeError(message) {
-	const m = message.trim();
-	if (m.length < 40) {
-		return false;
-	}
-	if (/\b(why|explain|what causes|how come)\b/i.test(m) && !/\b(fix|solve|resolve)\b/i.test(m)) {
-		return false;
-	}
-	return (
-		/\belement type is invalid\b/i.test(m) ||
-		/\bexpected a string \(for built-in components\)/i.test(m) ||
-		/\b(TypeError|ReferenceError|SyntaxError|Unhandled Runtime Error)\b/.test(m) ||
-		(/\.tsx?\s*\(\d+:\d+\)/.test(m) && /\bat\s+\w+/i.test(m))
-	);
-}
-
-/**
  * @param {object} parsed
  * @param {string} task
- * @returns {{ intent: string, investigate: boolean, allowWrites: boolean, effectiveTask: string }}
+ * @returns {{ intent: string, investigate: boolean, allowWrites: boolean, effectiveTask: string, seedPaths: string[] }}
  */
 function normalizeLlmRouterOutput(parsed, task) {
 	const intent = ['chat', 'plan', 'edit'].includes(parsed.intent) ? parsed.intent : 'chat';
@@ -694,6 +670,12 @@ function normalizeLlmRouterOutput(parsed, task) {
 		typeof parsed.effective_task === 'string' && parsed.effective_task.trim()
 			? parsed.effective_task.trim()
 			: task;
+	const seedPaths = Array.isArray(parsed.seed_paths)
+		? parsed.seed_paths
+			.filter((p) => typeof p === 'string' && p.trim())
+			.map((p) => p.trim().replace(/\\/g, '/').replace(/^\.\//, ''))
+			.slice(0, 6)
+		: [];
 
 	if (intent === 'edit') {
 		investigate = false;
@@ -704,7 +686,7 @@ function normalizeLlmRouterOutput(parsed, task) {
 		investigate = false;
 	}
 
-	return { intent, investigate, allowWrites, effectiveTask };
+	return { intent, investigate, allowWrites, effectiveTask, seedPaths };
 }
 
 /**
@@ -727,54 +709,26 @@ async function resolveWithLlm(adapter, task, history) {
 				{ role: 'system', content: LLM_ROUTER_PROMPT },
 				{
 					role: 'user',
-					content: `Recent conversation:\n${recent || '(none)'}${assistantBlock}\n\nLatest user message:\n${task}`,
+					content: `Recent conversation:\n${recent || '(none)'}${assistantBlock}\n\nLatest user message (verbatim — may be error paste, code, or anything):\n${task || '(empty message)'}`,
 				},
 			],
 			{ temperature: 0, max_tokens: 400 },
 		);
 		const cleaned = raw.replace(/```json\n?|\n?```/g, '').trim();
 		const parsed = JSON.parse(cleaned);
-		const { intent, investigate, allowWrites, effectiveTask } = normalizeLlmRouterOutput(parsed, task);
+		const { intent, investigate, allowWrites, effectiveTask, seedPaths } = normalizeLlmRouterOutput(parsed, task);
 
-		let resolution = finalizeResolution({
+		return finalizeResolution({
 			intent,
 			effectiveTask,
 			readOnly: !allowWrites,
 			allowWrites,
 			investigate,
 			agentic: false,
+			seedPaths,
 			confidence: typeof parsed.confidence === 'number' && parsed.confidence >= 0.75 ? 'high' : 'medium',
 			reason: `llm:${parsed.reason ?? 'router'}`,
 		});
-
-		if (!resolution.allowWrites && resolution.intent === 'chat' && wantsAgentToFix(task, history)) {
-			const lastA = lastAssistantTurn(history);
-			resolution = finalizeResolution({
-				intent: 'edit',
-				effectiveTask: buildDelegateFixTask(task, lastA?.content ?? ''),
-				readOnly: false,
-				allowWrites: true,
-				investigate: false,
-				agentic: false,
-				confidence: 'high',
-				reason: 'escalation:fix-follow-up',
-			});
-		}
-
-		if (!resolution.allowWrites && isPastedRuntimeError(task)) {
-			resolution = finalizeResolution({
-				intent: 'edit',
-				effectiveTask: `Fix this error in the codebase:\n${task.slice(0, 2500)}`,
-				readOnly: false,
-				allowWrites: true,
-				investigate: false,
-				agentic: false,
-				confidence: 'high',
-				reason: 'escalation:pasted-error',
-			});
-		}
-
-		return resolution;
 	} catch (err) {
 		console.warn('[IntentRouter] LLM router failed:', err instanceof Error ? err.message : err);
 		return null;
@@ -782,7 +736,7 @@ async function resolveWithLlm(adapter, task, history) {
 }
 
 /**
- * Resolves intent for Auto mode via LLM only (Cursor-style). Heuristic regex is legacy/debug only.
+ * Resolves what to do for Auto mode via LLM only — no regex, no heuristic shortcuts.
  * @param {string} task
  * @param {object} options
  * @param {import('../adapters/OpenAICompatibleAdapter.js').OpenAICompatibleAdapter | import('../adapters/OllamaAdapter.js').OllamaAdapter | null} [adapter]
@@ -791,13 +745,16 @@ async function resolveWithLlm(adapter, task, history) {
 export async function resolveIntentPermissions(task, options = {}, adapter = null) {
 	const mode = options.chatMode ?? 'auto';
 
-	const modeResult = resolveFromMode(mode, task);
-	if (modeResult) {
-		return modeResult;
+	// Explicit mode pills (Ask / Plan / Edit / Agent) — user chose behavior
+	if (mode !== 'auto') {
+		const modeResult = resolveFromMode(mode, task);
+		if (modeResult) {
+			return modeResult;
+		}
 	}
 
-	// Auto (+ hybrid/llm): LLM classifies intent BEFORE tools/shards — no regex scoring.
-	if (mode === 'auto' && ROUTER_MODE !== 'heuristic') {
+	// Auto: LLM understands the message — period
+	if (mode === 'auto') {
 		if (adapter) {
 			const llmResult = await resolveWithLlm(adapter, task, options.history ?? []);
 			if (llmResult) {
@@ -807,7 +764,17 @@ export async function resolveIntentPermissions(task, options = {}, adapter = nul
 		return fallbackResolution(task);
 	}
 
-	// Legacy heuristic mode (neurocode.chat.intentRouter = heuristic) for offline debugging only.
+	// Legacy heuristic (neurocode.chat.intentRouter = heuristic only)
+	if (ROUTER_MODE === 'heuristic') {
+		return resolveUserIntent(task, options);
+	}
+
+	if (adapter) {
+		const llmResult = await resolveWithLlm(adapter, task, options.history ?? []);
+		if (llmResult) {
+			return llmResult;
+		}
+	}
 	return resolveUserIntent(task, options);
 }
 
