@@ -126,7 +126,7 @@ function resolveLlmConfig(cfg: vscode.WorkspaceConfiguration): LlmConfig {
 		ollamaUrl: cfg.get<string>('llm.ollamaUrl', 'http://localhost:11434'),
 		ollamaModel: cfg.get<string>('llm.ollamaModel', 'qwen2.5-coder:7b'),
 		fallbackToOllama: cfg.get<boolean>('llm.fallbackToOllama', false),
-		maxOutputTokens: cfg.get<number>('llm.maxOutputTokens', 1024),
+		maxOutputTokens: cfg.get<number>('llm.maxOutputTokens', 2048),
 	};
 }
 

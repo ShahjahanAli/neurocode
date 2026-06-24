@@ -269,7 +269,7 @@
         },
         "neurocode.llm.maxOutputTokens": {
           "type": "number",
-          "default": 1024,
+          "default": 2048,
           "minimum": 64,
           "maximum": 8000,
           "description": "Max completion tokens (max_tokens) per LLM call. Lower if your gateway returns 402 insufficient credits (e.g. OpenRouter — set below your remaining credit limit)."

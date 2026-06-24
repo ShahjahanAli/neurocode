@@ -569,6 +569,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 							? `Reading \`${pathArg}\`…`
 							: chunk.tool === 'search_code'
 								? 'Searching codebase…'
+								: chunk.tool === 'search_replace' && pathArg
+									? `Editing \`${pathArg}\`…`
 								: chunk.tool === 'write_file' && pathArg
 									? `Writing \`${pathArg}\`…`
 									: `Tool: ${chunk.tool}…`;
@@ -888,6 +890,24 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 	}
 
 	/**
+	 * Rejects truncated or tool-call content before writing to disk.
+	 * @param content - Proposed file body.
+	 * @param relPath - Relative path within the workspace.
+	 */
+	private isIncompleteSource(content: string, relPath: string): boolean {
+		const trimmed = content.trim();
+		if (trimmed.length < 8) {
+			return true;
+		}
+		if (!/\.(tsx?|jsx?)$/i.test(relPath)) {
+			return false;
+		}
+		const open = (trimmed.match(/\{/g) ?? []).length;
+		const close = (trimmed.match(/\}/g) ?? []).length;
+		return Math.abs(open - close) > 1;
+	}
+
+	/**
 	 * Writes staged agent tool outputs to the workspace.
 	 * @param writes - Pending write_file tool results.
 	 * @param projectPath - Workspace root.
@@ -899,8 +919,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 		const applied: Array<{ file: string; action: 'created' | 'updated' }> = [];
 
 		for (const write of writes) {
-			if (isAgentToolArtifact(write.content)) {
-				console.warn(`[ChatPanel] Skipping invalid write_file content for ${write.path}`);
+			if (isAgentToolArtifact(write.content) || this.isIncompleteSource(write.content, write.path)) {
+				console.warn(`[ChatPanel] Skipping invalid or incomplete write for ${write.path}`);
 				continue;
 			}
 

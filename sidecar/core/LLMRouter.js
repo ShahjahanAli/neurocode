@@ -108,8 +108,14 @@ export class LLMRouter {
 
 	/** @returns {number} Max completion tokens for gateway/Ollama chat calls. */
 	static getMaxOutputTokens() {
-		const parsed = parseInt(process.env.NEUROCODE_LLM_MAX_OUTPUT_TOKENS || '1024', 10);
-		return Number.isFinite(parsed) && parsed >= 64 ? parsed : 1024;
+		const parsed = parseInt(process.env.NEUROCODE_LLM_MAX_OUTPUT_TOKENS || '2048', 10);
+		return Number.isFinite(parsed) && parsed >= 64 ? parsed : 2048;
+	}
+
+	/** @returns {number} Higher cap for agent tool turns (write_file / search_replace). */
+	static getAgentOutputTokens() {
+		const base = LLMRouter.getMaxOutputTokens();
+		return Math.min(8000, Math.max(base, 2048));
 	}
 
 	/** @returns {number} Dynamic shard token budget based on active backend. */

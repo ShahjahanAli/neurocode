@@ -23,7 +23,7 @@ const CODE_EXT =
 	/\.(tsx?|jsx?|py|go|rs|java|php|vue|svelte|css|scss|json|md|html|mjs|cjs)$/i;
 
 const NEUROCODE_TOOL_FENCE_RE = /```neurocode-tool/i;
-const TOOL_CALL_JSON_RE = /^\s*\{\s*"tool"\s*:\s*"(?:read_file|search_code|write_file|reply)"/;
+const TOOL_CALL_JSON_RE = /^\s*\{\s*"tool"\s*:\s*"(?:read_file|search_code|write_file|search_replace|reply)"/;
 
 /**
  * Detects agent tool-call artifacts that must never be written as source files.

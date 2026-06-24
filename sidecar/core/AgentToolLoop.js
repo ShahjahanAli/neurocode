@@ -2,7 +2,7 @@ import { LLMRouter } from './LLMRouter.js';
 import { resolveModelId } from './ModelSelector.js';
 import { trimHistory } from './ChatOrchestrator.js';
 import { recordAnalyticsEvent } from './AnalyticsCollector.js';
-import { executeAgentTool, AGENT_TOOL_NAMES } from './AgentTools.js';
+import { executeAgentTool, AGENT_TOOL_NAMES, isIncompleteWriteContent } from './AgentTools.js';
 import { safeJsonPreview, sanitizeForJson } from '../utils/safeJson.js';
 
 const AGENT_SYSTEM = `You are NeuroCode Agent — an autonomous coding assistant inside VS Code (like Cursor Agent).
@@ -18,19 +18,20 @@ Respond with a single fenced block:
 \`\`\`
 
 Available tools:
-- **read_file** — args: { "path": "relative/path.ts", "max_chars": 14000 }
+- **read_file** — args: { "path": "relative/path.ts", "max_chars": 6000 }
 - **search_code** — args: { "query": "auth middleware", "limit": 6 }
+- **search_replace** — args: { "path": "relative/path.ts", "old_text": "exact snippet", "new_text": "replacement" }
+  - Prefer for small fixes (one import line, a few lines). Low token cost.
 - **write_file** — args: { "path": "relative/path.ts", "content": "full file contents" }
-  - Output COMPLETE file content. Match project conventions.
+  - Only when most of the file changes. Output COMPLETE file content.
 - **reply** — args: { "message": "final markdown answer to the user" }
   - Use when the task is done or you only need to explain (no more file changes).
 
 ## Rules
-- Start by reading or searching if you lack context — do not guess file contents
+- Start by reading 1–2 relevant files — do not load the whole project
 - One tool call per turn; wait for the tool result before the next call
-- When the task is to FIX an error: you MUST call **write_file** with the corrected file(s) — do not only tell the user what to change
-- For import/export mismatches: read the file first, then change only the broken import line — do not rewrite entire components
-- Prefer **write_file** for code changes (full files, not diffs)
+- When the task is to FIX an error: use **search_replace** for line-level fixes; use **write_file** only for large rewrites
+- For import/export mismatches: read the file, then **search_replace** the import line only
 - End with **reply** when finished — summarize what you changed
 - Keep reply concise; list files created/updated
 - Max ${AGENT_TOOL_NAMES.length} tools available: ${AGENT_TOOL_NAMES.join(', ')}`;
@@ -53,7 +54,7 @@ export function parseToolCall(response) {
 		candidates.push(fencedOpen[1].trim().replace(/```\s*$/i, '').trim());
 	}
 
-	const inlineRe = /\{\s*"tool"\s*:\s*"(read_file|search_code|write_file|reply)"[\s\S]*?\}/g;
+	const inlineRe = /\{\s*"tool"\s*:\s*"(read_file|search_code|write_file|search_replace|reply)"[\s\S]*?\}/g;
 	let inlineMatch;
 	while ((inlineMatch = inlineRe.exec(response)) !== null) {
 		candidates.push(inlineMatch[0]);
@@ -85,7 +86,73 @@ function isToolArtifact(text) {
 	if (/```neurocode-tool/i.test(trimmed)) {
 		return true;
 	}
-	return /^\s*\{\s*"tool"\s*:\s*"(?:read_file|search_code|write_file|reply)"/.test(trimmed);
+	return /^\s*\{\s*"tool"\s*:\s*"(?:read_file|search_code|write_file|search_replace|reply)"/.test(trimmed);
+}
+
+const AGENT_READ_PREVIEW_CHARS = 2500;
+const AGENT_SEED_PREVIEW_CHARS = 3000;
+const AGENT_HISTORY_TURNS = 2;
+
+/**
+ * @param {string} content
+ * @param {number} [maxLen]
+ * @returns {string}
+ */
+function compactHistoryContent(content, maxLen = 500) {
+	const text = String(content ?? '');
+	if (text.length <= maxLen) {
+		return text;
+	}
+	if (isToolArtifact(text)) {
+		return '[prior agent tool turn]';
+	}
+	return `${text.slice(0, maxLen)}…`;
+}
+
+/**
+ * @param {string} tool
+ * @param {{ args?: Record<string, unknown> }} toolCall
+ * @returns {string}
+ */
+function compactAssistantTurn(tool, toolCall) {
+	const path = toolCall.args?.path ? String(toolCall.args.path) : '';
+	return path ? `[Called ${tool}: ${path}]` : `[Called ${tool}]`;
+}
+
+/**
+ * @param {string} tool
+ * @param {{ args?: Record<string, unknown> }} toolCall
+ * @param {Record<string, unknown>} result
+ * @returns {string}
+ */
+function formatToolResultMessage(tool, toolCall, result) {
+	if (tool === 'read_file' && result.success && typeof result.content === 'string') {
+		const rel = String(result.path ?? toolCall.args?.path ?? '?');
+		const body = result.content.slice(0, AGENT_READ_PREVIEW_CHARS);
+		const suffix = result.truncated || result.content.length > AGENT_READ_PREVIEW_CHARS
+			? ` (showing ${body.length}/${result.content.length} chars)`
+			: '';
+		return `read_file \`${rel}\`${suffix}:\n\`\`\`\n${body}\n\`\`\`\n\nContinue with the next tool, or reply when done.`;
+	}
+	if (tool === 'write_file' || tool === 'search_replace') {
+		if (result.success && result.staged) {
+			return `${tool} staged \`${result.path}\`. Continue or reply when done.`;
+		}
+		return `${tool} failed: ${result.error ?? 'unknown error'}. Try search_replace for a smaller edit.`;
+	}
+	return `Tool result (${tool}):\n\`\`\`json\n${safeJsonPreview(summarizeToolResult(result))}\n\`\`\`\n\nContinue with the next tool call, or reply when done.`;
+}
+
+/**
+ * @param {string} response
+ * @returns {boolean}
+ */
+function isTruncatedToolResponse(response) {
+	const text = String(response ?? '');
+	if (/```neurocode-tool/i.test(text) && !/```neurocode-tool[\s\S]*?```/i.test(text)) {
+		return true;
+	}
+	return false;
 }
 
 /**
@@ -132,7 +199,7 @@ async function seedAgentFiles(seedPaths, toolCtx, write) {
 	for (const rel of seedPaths.slice(0, 4)) {
 		write({ type: 'status', content: `_Reading \`${rel}\`…` });
 		write({ type: 'tool_start', tool: 'read_file', args: { path: rel } });
-		const result = await executeAgentTool('read_file', { path: rel, max_chars: 14_000 }, toolCtx);
+		const result = await executeAgentTool('read_file', { path: rel, max_chars: 5000 }, toolCtx);
 		write({ type: 'tool_result', tool: 'read_file', result: summarizeToolResult(result) });
 		if (result.success) {
 			seeded.push({ path: rel, result });
@@ -150,24 +217,25 @@ async function seedAgentFiles(seedPaths, toolCtx, write) {
  */
 function buildAgentMessages(task, shards, history, seeded = []) {
 	const seedBlock = seeded.length
-		? seeded.map((s) => `// ${s.path} (from error location)\n${String(s.result.content ?? '').slice(0, 12_000)}`).join('\n\n')
+		? seeded.map((s) => `// ${s.path} (from error location)\n${String(s.result.content ?? '').slice(0, AGENT_SEED_PREVIEW_CHARS)}`).join('\n\n')
 		: '';
 	const contextBlock = seedBlock
-		|| (shards.length
-			? shards.map((s) => `// ${s.relativeFile} (${s.reason})\n${s.content}`).join('\n\n')
-			: '(no files pre-loaded — use read_file or search_code)');
+		|| '(no files pre-loaded — use read_file on 1–2 relevant paths from the error)';
 
 	const messages = [{ role: 'system', content: AGENT_SYSTEM }];
 
-	for (const turn of trimHistory(history, 6)) {
+	for (const turn of trimHistory(history, AGENT_HISTORY_TURNS)) {
 		if (turn.role === 'user' || turn.role === 'assistant') {
-			messages.push({ role: turn.role, content: turn.content });
+			messages.push({
+				role: turn.role,
+				content: compactHistoryContent(turn.content),
+			});
 		}
 	}
 
 	messages.push({
 		role: 'user',
-		content: `Project context (preview):\n${contextBlock}\n\nTask: ${task}\n\nCall your first tool (read_file if you need more context, write_file to fix, reply when done).`,
+		content: `Task: ${task}\n\n${seedBlock ? `Relevant file preview:\n${contextBlock}\n\n` : ''}Call your first tool (read_file for context, search_replace for small fixes, write_file only if rewriting most of a file).`,
 	});
 
 	return messages;
@@ -281,22 +349,33 @@ export async function streamAgentToolLoop(services, params, write) {
 
 		const messages = buildAgentMessages(task, shards, history, seeded);
 
+		const agentMaxTokens = LLMRouter.getAgentOutputTokens();
+
 		for (let step = 0; step < maxSteps; step++) {
 			write({ type: 'step', step: step + 1, maxSteps });
 
 			let response = '';
 			for await (const token of adapter.stream(messages, {
 				temperature: 0.1,
-				max_tokens: LLMRouter.getMaxOutputTokens(),
+				max_tokens: agentMaxTokens,
 			})) {
 				response += token;
+			}
+
+			if (isTruncatedToolResponse(response)) {
+				messages.push({ role: 'assistant', content: '[Truncated tool output]' });
+				messages.push({
+					role: 'user',
+					content: 'Your last response was cut off (output token limit). Use search_replace for small edits instead of write_file, then reply.',
+				});
+				continue;
 			}
 
 			const toolCall = parseToolCall(response);
 
 			if (!toolCall) {
 				if (isToolArtifact(response)) {
-					messages.push({ role: 'assistant', content: response });
+					messages.push({ role: 'assistant', content: '[Invalid tool format]' });
 					messages.push({
 						role: 'user',
 						content: 'Respond with exactly one ```neurocode-tool``` block containing valid JSON for a single tool call.',
@@ -315,13 +394,25 @@ export async function streamAgentToolLoop(services, params, write) {
 				break;
 			}
 
-			write({ type: 'tool_start', tool: toolCall.tool, args: toolCall.args });
-
-			if (toolCall.tool === 'write_file' && !allowWrites) {
-				messages.push({ role: 'assistant', content: response });
+			if (
+				toolCall.tool === 'write_file'
+				&& isIncompleteWriteContent(String(toolCall.args.content ?? ''), String(toolCall.args.path ?? ''))
+			) {
+				messages.push({ role: 'assistant', content: compactAssistantTurn(toolCall.tool, toolCall) });
 				messages.push({
 					role: 'user',
-					content: 'write_file is not allowed for this request. Use read_file/search_code, then reply.',
+					content: 'write_file content is incomplete or truncated. Use search_replace with old_text/new_text for the minimal fix.',
+				});
+				continue;
+			}
+
+			write({ type: 'tool_start', tool: toolCall.tool, args: toolCall.args });
+
+			if ((toolCall.tool === 'write_file' || toolCall.tool === 'search_replace') && !allowWrites) {
+				messages.push({ role: 'assistant', content: compactAssistantTurn(toolCall.tool, toolCall) });
+				messages.push({
+					role: 'user',
+					content: 'File writes are not allowed for this request. Use read_file/search_code, then reply.',
 				});
 				continue;
 			}
@@ -332,17 +423,22 @@ export async function streamAgentToolLoop(services, params, write) {
 			write({ type: 'tool_result', tool: toolCall.tool, result: sanitizeForJson(summary) });
 			toolLog.push({ tool: toolCall.tool, args: toolCall.args, result: summary });
 
-			if (toolCall.tool === 'write_file' && result.success && result.staged && allowWrites) {
+			if (
+				(toolCall.tool === 'write_file' || toolCall.tool === 'search_replace')
+				&& result.success
+				&& result.staged
+				&& allowWrites
+			) {
 				pendingWrites.push({
 					path: String(result.path),
 					content: String(result.content),
 				});
 			}
 
-			messages.push({ role: 'assistant', content: response });
+			messages.push({ role: 'assistant', content: compactAssistantTurn(toolCall.tool, toolCall) });
 			messages.push({
 				role: 'user',
-				content: `Tool result for ${toolCall.tool}:\n\`\`\`json\n${safeJsonPreview(result)}\n\`\`\`\n\nContinue with the next tool call, or reply when done.`,
+				content: formatToolResultMessage(toolCall.tool, toolCall, result),
 			});
 		}
 

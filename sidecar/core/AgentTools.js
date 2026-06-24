@@ -15,7 +15,36 @@ function isInvalidWriteContent(content) {
 	if (/```neurocode-tool/i.test(trimmed)) {
 		return true;
 	}
-	return /^\s*\{\s*"tool"\s*:\s*"(?:read_file|search_code|write_file|reply)"/.test(trimmed);
+	return /^\s*\{\s*"tool"\s*:\s*"(?:read_file|search_code|write_file|search_replace|reply)"/.test(trimmed);
+}
+
+/**
+ * @param {string} content
+ * @param {string} [relPath]
+ * @returns {boolean}
+ */
+export function isIncompleteWriteContent(content, relPath = '') {
+	const trimmed = String(content ?? '').trim();
+	if (!trimmed || trimmed.length < 8) {
+		return true;
+	}
+	if (isInvalidWriteContent(trimmed)) {
+		return true;
+	}
+	const ext = String(relPath ?? '').toLowerCase();
+	if (/\.(tsx?|jsx?)$/.test(ext)) {
+		const open = (trimmed.match(/\{/g) ?? []).length;
+		const close = (trimmed.match(/\}/g) ?? []).length;
+		const openParen = (trimmed.match(/\(/g) ?? []).length;
+		const closeParen = (trimmed.match(/\)/g) ?? []).length;
+		if (Math.abs(open - close) > 1 || Math.abs(openParen - closeParen) > 1) {
+			return true;
+		}
+		if (!trimmed.includes('\n') && trimmed.length < 40) {
+			return true;
+		}
+	}
+	return false;
 }
 
 /**
@@ -65,7 +94,7 @@ export async function executeAgentTool(toolName, args, ctx) {
 				return { success: false, error: `File not found: ${filePath}` };
 			}
 
-			const maxChars = Number(args.max_chars) || 14_000;
+			const maxChars = Math.min(Number(args.max_chars) || 6000, 8000);
 			const raw = fs.readFileSync(abs, 'utf8');
 			return {
 				success: true,
@@ -152,6 +181,12 @@ export async function executeAgentTool(toolName, args, ctx) {
 					error: 'content looks like a tool-call JSON block, not source code — write the full file body',
 				};
 			}
+			if (isIncompleteWriteContent(content, relPath)) {
+				return {
+					success: false,
+					error: 'content looks truncated or incomplete — use search_replace for small edits',
+				};
+			}
 
 			return {
 				success: true,
@@ -159,6 +194,46 @@ export async function executeAgentTool(toolName, args, ctx) {
 				path: relPath,
 				content,
 				note: 'Write staged — extension host will apply to workspace',
+			};
+		}
+
+		case 'search_replace': {
+			const relPath = String(args.path ?? '').replace(/\\/g, '/').replace(/^\.\//, '');
+			const oldText = String(args.old_text ?? args.oldText ?? '');
+			const newText = String(args.new_text ?? args.newText ?? '');
+
+			if (!relPath) {
+				return { success: false, error: 'path is required' };
+			}
+			if (!oldText) {
+				return { success: false, error: 'old_text is required' };
+			}
+
+			const abs = resolveReadablePath(relPath, projectPath, db);
+			if (!abs) {
+				return { success: false, error: `File not found: ${relPath}` };
+			}
+
+			const raw = fs.readFileSync(abs, 'utf8');
+			if (!raw.includes(oldText)) {
+				return {
+					success: false,
+					error: 'old_text not found in file',
+					preview: raw.slice(0, 400),
+				};
+			}
+
+			const updated = raw.replace(oldText, newText);
+			if (isInvalidWriteContent(updated) || isIncompleteWriteContent(updated, relPath)) {
+				return { success: false, error: 'search_replace produced invalid file content' };
+			}
+
+			return {
+				success: true,
+				staged: true,
+				path: path.relative(projectPath, abs).replace(/\\/g, '/'),
+				content: updated,
+				note: 'search_replace staged — extension host will apply to workspace',
 			};
 		}
 
@@ -175,4 +250,4 @@ export async function executeAgentTool(toolName, args, ctx) {
 	}
 }
 
-export const AGENT_TOOL_NAMES = ['read_file', 'search_code', 'write_file', 'reply'];
+export const AGENT_TOOL_NAMES = ['read_file', 'search_code', 'write_file', 'search_replace', 'reply'];
