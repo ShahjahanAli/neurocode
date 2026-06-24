@@ -79,6 +79,9 @@ function suggestPrefetchPaths(task) {
 	if (/\b(test message|chatinterface|frontend|send button|onClick|input field)\b/i.test(lower)) {
 		paths.push('components/chat/ChatInterface.tsx', 'app/page.tsx');
 	}
+	if (/\b(error|import|export|page\.tsx|ChatInterface|Element type|still not solved|not solving)\b/i.test(lower)) {
+		paths.push('app/page.tsx', 'components/chat/ChatInterface.tsx');
+	}
 	return [...new Set(paths)];
 }
 

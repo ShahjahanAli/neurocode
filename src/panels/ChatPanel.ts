@@ -1085,7 +1085,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 		data: AgentChatData,
 		projectPath: string,
 	): Promise<AgentChatData> {
-		if (data.readOnly || data.allowWrites === false) {
+		if (data.readOnly || data.allowWrites === false || data.investigate) {
 			return data;
 		}
 		if (data.intent !== 'chat' || !getConfig().chat.fixOnCheck || !getConfig().chat.autoApply) {

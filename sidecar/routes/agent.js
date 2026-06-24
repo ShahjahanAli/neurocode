@@ -5,6 +5,7 @@ import { services } from '../core/services.js';
 import { runOrchestratedChat, streamOrchestratedChat } from '../core/ChatOrchestrator.js';
 import { streamAgentToolLoop } from '../core/AgentToolLoop.js';
 import { recordAnalyticsEvent } from '../core/AnalyticsCollector.js';
+import { safeJsonStringify } from '../utils/safeJson.js';
 
 const router = Router();
 
@@ -166,13 +167,20 @@ router.post('/chat/stream', async (req, res) => {
 		return res.end();
 	}
 
-	await streamOrchestratedChat(
-		services,
-		{ task, activeFile, projectPath, history, forceIntent, chatMode, fixOnCheck, attachments, modelSelection, selectedModel },
-		(event) => {
-			res.write(`data: ${JSON.stringify(event)}\n\n`);
-		},
-	);
+	try {
+		await streamOrchestratedChat(
+			services,
+			{ task, activeFile, projectPath, history, forceIntent, chatMode, fixOnCheck, attachments, modelSelection, selectedModel },
+			(event) => {
+				res.write(`data: ${safeJsonStringify(event)}\n\n`);
+			},
+		);
+	} catch (err) {
+		res.write(`data: ${safeJsonStringify({
+			type: 'error',
+			message: err instanceof Error ? err.message : String(err),
+		})}\n\n`);
+	}
 
 	res.write('data: [DONE]\n\n');
 	res.end();
@@ -202,13 +210,20 @@ router.post('/loop/stream', async (req, res) => {
 		return res.end();
 	}
 
-	await streamAgentToolLoop(
-		services,
-		{ task, activeFile, projectPath, history, maxSteps, attachments, modelSelection, selectedModel, chatMode },
-		(event) => {
-			res.write(`data: ${JSON.stringify(event)}\n\n`);
-		},
-	);
+	try {
+		await streamAgentToolLoop(
+			services,
+			{ task, activeFile, projectPath, history, maxSteps, attachments, modelSelection, selectedModel, chatMode },
+			(event) => {
+				res.write(`data: ${safeJsonStringify(event)}\n\n`);
+			},
+		);
+	} catch (err) {
+		res.write(`data: ${safeJsonStringify({
+			type: 'error',
+			message: err instanceof Error ? err.message : String(err),
+		})}\n\n`);
+	}
 
 	res.write('data: [DONE]\n\n');
 	res.end();

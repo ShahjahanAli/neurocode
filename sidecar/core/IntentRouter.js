@@ -24,7 +24,7 @@ const SOCIAL_ACK_RE =
 	/^(thanks?|thank you|thx|ty|cheers|appreciated|much appreciated|got it|cool|nice|perfect|great|awesome|lovely|wonderful|good to know|noted|ok thanks|okay thanks)\b[!. ]*$/i;
 
 const CONSENT_RE =
-	/^(yes|yep|yeah|yup|ok|okay|sure|do it|go ahead|go for it|sounds good|that works|let'?s do it|make it happen|please do|do that|do this|apply it|ship it|implement it)\b/i;
+	/^(yes|yep|yeah|yup|ok|okay|sure|do it|go ahead|go for it|sounds good|that works|let'?s do it|make it happen|please do|do that|do this|apply it|ship it|implement it|implement|fix it|fix this)\b/i;
 
 const NEGATIVE_RE = /^(no|nope|don'?t|wait|stop|not yet|hold on)\b/i;
 
@@ -54,7 +54,7 @@ const FIX_REQUEST_RE =
 
 /** Debug / config questions — investigate, do not rewrite files. */
 const INVESTIGATE_RE =
-	/\b(why|how come|root cause|what causes|what caused|debug|diagnos|figure out|not resolved|still (?:not )?(?:working|resolved|fixed|correct)|still (?:getting|seeing|have)|not working|doesn'?t work|didn'?t work|same (?:issue|problem|payload|error)|env(?:ironment)?(?:\s+file)?|\.env|dotenv|environment variable|config(?:uration)?|settings?|payload|api\s*key|which model|wrong model|default (?:model|setting)|hardcoded|should (?:it|we) (?:use|read)|check (?:the |my )?(?:env|config|settings|\.env)|reading from env|from env|go over|walk (?:me )?through|trace (?:through)?|review (?:the )?(?:full |whole )?(?:system|flow|stack)|full system|entire (?:flow|stack)|end.to.end|test message|why am i seeing)\b/i;
+	/\b(why|how come|can you check|check why|root cause|what causes|what caused|debug|diagnos|figure out|not resolved|still (?:not )?(?:working|resolved|fixed|correct|solved)|still (?:getting|seeing|have)|not working|doesn'?t work|didn'?t work|not solving|same (?:issue|problem|payload|error)|env(?:ironment)?(?:\s+file)?|\.env|dotenv|environment variable|config(?:uration)?|settings?|payload|api\s*key|which model|wrong model|default (?:model|setting)|hardcoded|should (?:it|we) (?:use|read)|check (?:the |my )?(?:env|config|settings|\.env)|reading from env|from env|go over|walk (?:me )?through|trace (?:through)?|review (?:the )?(?:full |whole )?(?:system|flow|stack)|full system|entire (?:flow|stack)|end.to.end|test message|why am i seeing|element type is invalid|default export|named import|mixed up default)\b/i;
 
 const EXPLICIT_WRITE_RE =
 	/\b(implement|apply|write (?:the )?code|change (?:the )?code|update (?:the )?file|edit (?:the )?file|create (?:the )?file|go ahead and (?:fix|implement)|please (?:fix|implement|update)|just fix)\b/i;
@@ -114,7 +114,7 @@ export function isRegressionReport(message, history = []) {
 	if (isInvestigateTask(message)) {
 		return true;
 	}
-	if (!/\b(still|not working|not resolved|didn'?t work|doesn'?t work|same problem|same issue)\b/i.test(m)) {
+	if (!/\b(still|not working|not resolved|not solving|still not solved|didn'?t work|doesn'?t work|same problem|same issue|why you|why are you not)\b/i.test(m)) {
 		return false;
 	}
 	if (/\b(payload|model|env|error|issue|fix)\b/i.test(m)) {
@@ -512,6 +512,52 @@ export function resolveUserIntent(task, options = {}) {
 }
 
 /**
+ * LLM router must not override heuristic investigate / regression safety.
+ * @param {string} task
+ * @param {IntentResolution} heuristic
+ * @param {IntentResolution} llm
+ * @returns {IntentResolution}
+ */
+function mergeLlmWithHeuristic(task, heuristic, llm) {
+	const trimmed = task.trim();
+	const mustInvestigate =
+		heuristic.investigate ||
+		isInvestigateTask(task) ||
+		(isLikelyQuestion(task) && !EXPLICIT_WRITE_RE.test(trimmed));
+
+	if (mustInvestigate && !EXPLICIT_WRITE_RE.test(trimmed)) {
+		return finalizeResolution({
+			...heuristic,
+			intent: 'chat',
+			investigate: true,
+			readOnly: true,
+			allowWrites: false,
+			agentic: false,
+			autoFixed: false,
+			reason: `safety:investigate(heuristic=${heuristic.reason},llm=${llm.reason})`,
+		});
+	}
+
+	if (llm.intent === 'edit' && isLikelyQuestion(task) && !EXPLICIT_WRITE_RE.test(trimmed)) {
+		return finalizeResolution({
+			intent: 'chat',
+			effectiveTask: task,
+			readOnly: true,
+			allowWrites: false,
+			investigate: true,
+			confidence: llm.confidence,
+			reason: `safety:question→investigate(llm=${llm.reason})`,
+		});
+	}
+
+	return finalizeResolution({
+		...llm,
+		autoFixed: heuristic.autoFixed,
+		agentic: llm.agentic || heuristic.agentic,
+	});
+}
+
+/**
  * Optional LLM classifier for ambiguous Auto messages.
  * @param {import('../adapters/OpenAICompatibleAdapter.js').OpenAICompatibleAdapter | import('../adapters/OllamaAdapter.js').OllamaAdapter} adapter
  * @param {string} task
@@ -567,6 +613,11 @@ export async function resolveIntentPermissions(task, options = {}, adapter = nul
 		return heuristic;
 	}
 
+	// Heuristic investigate/regression always wins — LLM must not downgrade to shard-chat hallucination.
+	if (heuristic.investigate || isRegressionReport(task, options.history ?? [])) {
+		return heuristic;
+	}
+
 	const ambiguous =
 		heuristic.confidence !== 'high' ||
 		(heuristic.intent === 'edit' && isLikelyQuestion(task) && !EXPLICIT_WRITE_RE.test(task.trim()));
@@ -575,7 +626,7 @@ export async function resolveIntentPermissions(task, options = {}, adapter = nul
 		if (adapter) {
 			const llmResult = await resolveWithLlm(adapter, task, options.history ?? []);
 			if (llmResult) {
-				return llmResult;
+				return mergeLlmWithHeuristic(task, heuristic, llmResult);
 			}
 		}
 	}
