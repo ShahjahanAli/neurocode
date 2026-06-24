@@ -61,7 +61,7 @@ const EXPLICIT_WRITE_RE =
 
 /** User wants the agent to apply a fix (Cursor-style), not manual instructions. */
 const DELEGATE_FIX_RE =
-	/\b(you (?:fix|update|change|apply|do)|fix (?:it|this)(?: for me)?|update it(?: for me| accordingly)?|apply (?:the )?fix|make the change|do the fix|you should (?:fix|update|change))\b/i;
+	/\b(you (?:fix|update|change|apply|do|solve|resolve)|fix (?:it|this)(?: for me)?|solve (?:it|this)(?: for me)?|resolve (?:it|this)(?: for me)?|update it(?: for me| accordingly)?|apply (?:the )?fix|make the change|do the fix|you should (?:fix|update|change|solve|resolve))\b/i;
 
 const FIX_ERROR_RE =
 	/\b(solve|fix|resolve|repair)\b[\s\S]{0,48}\b(error|issue|bug)\b|\b(error|issue|bug)\b[\s\S]{0,48}\b(solve|fix|resolve|repair)\b/i;
@@ -102,6 +102,19 @@ Cursor-style routing (use judgment, not keywords):
 - Greeting/thanks/small talk → intent chat, investigate false, allow_writes false — brief friendly reply, no tools
 - Large feature / migration / "build X like Y" → intent plan, investigate false, allow_writes false
 - When ambiguous: investigate true if reading code first helps; allow_writes true only when user clearly wants changes applied
+
+## CRITICAL follow-up rule
+If the assistant already diagnosed a bug and suggested a concrete code change, and the user now says anything like solve, resolve, fix, apply, implement, "do it", "you fix", or "resolve this" — you MUST return intent "edit", investigate false, allow_writes true. Never return chat/explain for those messages.
+
+## Examples
+User: [React error: Element type is invalid... app/page.tsx ChatInterface]
+→ {"intent":"edit","investigate":false,"allow_writes":true,"effective_task":"Fix ChatInterface import/export mismatch in app/page.tsx","confidence":0.9,"reason":"error needs code fix"}
+
+User: "solve this issue" (assistant previously said change default import in app/page.tsx)
+→ {"intent":"edit","investigate":false,"allow_writes":true,"effective_task":"Change app/page.tsx to default-import ChatInterface from @/components/chat/ChatInterface","confidence":0.95,"reason":"user wants fix applied"}
+
+User: "why does this error happen?"
+→ {"intent":"chat","investigate":true,"allow_writes":false,"effective_task":"Explain root cause of Element type invalid error","confidence":0.9,"reason":"diagnosis only"}
 
 effective_task must be actionable (bad: "help user"; good: "Fix import/export mismatch between app/page.tsx and ChatInterface").`;
 
@@ -219,6 +232,9 @@ function isAssistantFixInstruction(content) {
 export function wantsAgentToFix(message, history = []) {
 	const trimmed = message.trim();
 	if (DELEGATE_FIX_RE.test(trimmed) || FIX_ERROR_RE.test(trimmed)) {
+		return true;
+	}
+	if (/\b(solve|resolve)\b/i.test(trimmed) && history.some((t) => t.role === 'assistant')) {
 		return true;
 	}
 	if (EXPLICIT_WRITE_RE.test(trimmed) && /\b(error|fix|import|export|element type)\b/i.test(trimmed)) {
@@ -645,6 +661,53 @@ function fallbackResolution(task) {
 }
 
 /**
+ * User pasted a runtime/stack error — treat as fix request unless they only ask why.
+ * @param {string} message
+ * @returns {boolean}
+ */
+function isPastedRuntimeError(message) {
+	const m = message.trim();
+	if (m.length < 40) {
+		return false;
+	}
+	if (/\b(why|explain|what causes|how come)\b/i.test(m) && !/\b(fix|solve|resolve)\b/i.test(m)) {
+		return false;
+	}
+	return (
+		/\belement type is invalid\b/i.test(m) ||
+		/\bexpected a string \(for built-in components\)/i.test(m) ||
+		/\b(TypeError|ReferenceError|SyntaxError|Unhandled Runtime Error)\b/.test(m) ||
+		(/\.tsx?\s*\(\d+:\d+\)/.test(m) && /\bat\s+\w+/i.test(m))
+	);
+}
+
+/**
+ * @param {object} parsed
+ * @param {string} task
+ * @returns {{ intent: string, investigate: boolean, allowWrites: boolean, effectiveTask: string }}
+ */
+function normalizeLlmRouterOutput(parsed, task) {
+	const intent = ['chat', 'plan', 'edit'].includes(parsed.intent) ? parsed.intent : 'chat';
+	let investigate = Boolean(parsed.investigate);
+	let allowWrites = Boolean(parsed.allow_writes);
+	const effectiveTask =
+		typeof parsed.effective_task === 'string' && parsed.effective_task.trim()
+			? parsed.effective_task.trim()
+			: task;
+
+	if (intent === 'edit') {
+		investigate = false;
+		allowWrites = true;
+	} else if (investigate) {
+		allowWrites = false;
+	} else if (allowWrites) {
+		investigate = false;
+	}
+
+	return { intent, investigate, allowWrites, effectiveTask };
+}
+
+/**
  * Cursor-style LLM intent classifier — sole router for Auto mode.
  * @param {import('../adapters/OpenAICompatibleAdapter.js').OpenAICompatibleAdapter | import('../adapters/OllamaAdapter.js').OllamaAdapter} adapter
  * @param {string} task
@@ -653,27 +716,27 @@ function fallbackResolution(task) {
  */
 async function resolveWithLlm(adapter, task, history) {
 	try {
-		const recent = history.slice(-6).map((t) => `${t.role}: ${t.content.slice(0, 500)}`).join('\n');
+		const lastAssistant = lastAssistantTurn(history);
+		const recent = history.slice(-6).map((t) => `${t.role}: ${t.content.slice(0, 1200)}`).join('\n');
+		const assistantBlock = lastAssistant
+			? `\n\n=== LAST ASSISTANT MESSAGE (may contain the fix to apply) ===\n${lastAssistant.content.slice(0, 4000)}`
+			: '';
+
 		const raw = await adapter.chat(
 			[
 				{ role: 'system', content: LLM_ROUTER_PROMPT },
 				{
 					role: 'user',
-					content: `Recent conversation:\n${recent || '(none)'}\n\nLatest user message:\n${task}`,
+					content: `Recent conversation:\n${recent || '(none)'}${assistantBlock}\n\nLatest user message:\n${task}`,
 				},
 			],
-			{ temperature: 0, max_tokens: 280 },
+			{ temperature: 0, max_tokens: 400 },
 		);
 		const cleaned = raw.replace(/```json\n?|\n?```/g, '').trim();
 		const parsed = JSON.parse(cleaned);
-		const intent = ['chat', 'plan', 'edit'].includes(parsed.intent) ? parsed.intent : 'chat';
-		const investigate = Boolean(parsed.investigate);
-		const allowWrites = Boolean(parsed.allow_writes) && !investigate;
-		const effectiveTask =
-			typeof parsed.effective_task === 'string' && parsed.effective_task.trim()
-				? parsed.effective_task.trim()
-				: task;
-		return finalizeResolution({
+		const { intent, investigate, allowWrites, effectiveTask } = normalizeLlmRouterOutput(parsed, task);
+
+		let resolution = finalizeResolution({
 			intent,
 			effectiveTask,
 			readOnly: !allowWrites,
@@ -683,6 +746,35 @@ async function resolveWithLlm(adapter, task, history) {
 			confidence: typeof parsed.confidence === 'number' && parsed.confidence >= 0.75 ? 'high' : 'medium',
 			reason: `llm:${parsed.reason ?? 'router'}`,
 		});
+
+		if (!resolution.allowWrites && resolution.intent === 'chat' && wantsAgentToFix(task, history)) {
+			const lastA = lastAssistantTurn(history);
+			resolution = finalizeResolution({
+				intent: 'edit',
+				effectiveTask: buildDelegateFixTask(task, lastA?.content ?? ''),
+				readOnly: false,
+				allowWrites: true,
+				investigate: false,
+				agentic: false,
+				confidence: 'high',
+				reason: 'escalation:fix-follow-up',
+			});
+		}
+
+		if (!resolution.allowWrites && isPastedRuntimeError(task)) {
+			resolution = finalizeResolution({
+				intent: 'edit',
+				effectiveTask: `Fix this error in the codebase:\n${task.slice(0, 2500)}`,
+				readOnly: false,
+				allowWrites: true,
+				investigate: false,
+				agentic: false,
+				confidence: 'high',
+				reason: 'escalation:pasted-error',
+			});
+		}
+
+		return resolution;
 	} catch (err) {
 		console.warn('[IntentRouter] LLM router failed:', err instanceof Error ? err.message : err);
 		return null;

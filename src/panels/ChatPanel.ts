@@ -541,6 +541,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 							agentic: chunk.agentic,
 							investigate: chunk.investigate,
 							model: chunk.model,
+							routingReason: (chunk as { reason?: string }).reason,
 						});
 					}
 					if (chunk.type === 'status' && chunk.content) {

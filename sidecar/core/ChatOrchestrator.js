@@ -213,6 +213,9 @@ export async function resolveIntentWithContext(task, forceIntent, shards, histor
  * @returns {boolean}
  */
 function shouldUseInvestigateLoop(resolved, chatMode = 'auto') {
+	if (resolved.intent === 'edit' && resolved.allowWrites) {
+		return false;
+	}
 	return (
 		(resolved.investigate || chatMode === 'explain') &&
 		!resolved.agentic &&
