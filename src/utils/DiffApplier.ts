@@ -22,6 +22,28 @@ export interface ParseCodeBlocksOptions {
 const CODE_EXT =
 	/\.(tsx?|jsx?|py|go|rs|java|php|vue|svelte|css|scss|json|md|html|mjs|cjs)$/i;
 
+const NEUROCODE_TOOL_FENCE_RE = /```neurocode-tool/i;
+const TOOL_CALL_JSON_RE = /^\s*\{\s*"tool"\s*:\s*"(?:read_file|search_code|write_file|reply)"/;
+
+/**
+ * Detects agent tool-call artifacts that must never be written as source files.
+ * @param text - Candidate file body or code block.
+ * @returns True when the text is a NeuroCode tool invocation, not real code.
+ */
+export function isAgentToolArtifact(text: string): boolean {
+	const trimmed = text.trim();
+	if (!trimmed) {
+		return false;
+	}
+	if (NEUROCODE_TOOL_FENCE_RE.test(trimmed)) {
+		return true;
+	}
+	if (TOOL_CALL_JSON_RE.test(trimmed)) {
+		return true;
+	}
+	return false;
+}
+
 const FILE_HEADER_RE =
 	/^\s*(?:\/\/|#)\s*(?:filename|file|path)\s*:\s*(.+?)\s*$/i;
 const BLOCK_COMMENT_HEADER_RE =
@@ -342,12 +364,18 @@ export function parseCodeBlocks(text: string, options: ParseCodeBlocksOptions = 
 	let lastEnd = 0;
 
 	while ((match = closedRe.exec(source)) !== null) {
+		const tag = match[1];
+		const body = match[2];
+		if (/^neurocode-tool\b/i.test(tag.trim()) || isAgentToolArtifact(body)) {
+			lastEnd = match.index + match[0].length;
+			continue;
+		}
 		const preamble = source.slice(lastEnd, match.index);
-		const block = parseBlockBody(match[1], match[2]);
+		const block = parseBlockBody(tag, body);
 		if (!block.filename) {
 			block.filename = filenameFromPreamble(preamble);
 		}
-		if (block.code.trim()) {
+		if (block.code.trim() && !isAgentToolArtifact(block.code)) {
 			blocks.push(block);
 		}
 		lastEnd = match.index + match[0].length;
@@ -379,7 +407,7 @@ export function parseCodeBlocks(text: string, options: ParseCodeBlocksOptions = 
 	}
 
 	resolveBlockFilenames(blocks, options, source);
-	return blocks;
+	return blocks.filter((b) => !isAgentToolArtifact(b.code));
 }
 
 /**

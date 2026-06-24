@@ -4,6 +4,21 @@ import { EmbeddingService } from './EmbeddingService.js';
 import { resolveTaskFilePath } from './FileReview.js';
 
 /**
+ * @param {string} content
+ * @returns {boolean}
+ */
+function isInvalidWriteContent(content) {
+	const trimmed = String(content ?? '').trim();
+	if (!trimmed) {
+		return true;
+	}
+	if (/```neurocode-tool/i.test(trimmed)) {
+		return true;
+	}
+	return /^\s*\{\s*"tool"\s*:\s*"(?:read_file|search_code|write_file|reply)"/.test(trimmed);
+}
+
+/**
  * @param {string} filePath
  * @param {string} projectPath
  * @param {import('node:sqlite').DatabaseSync | null} db
@@ -130,6 +145,12 @@ export async function executeAgentTool(toolName, args, ctx) {
 			}
 			if (!content.trim()) {
 				return { success: false, error: 'content is required' };
+			}
+			if (isInvalidWriteContent(content)) {
+				return {
+					success: false,
+					error: 'content looks like a tool-call JSON block, not source code — write the full file body',
+				};
 			}
 
 			return {

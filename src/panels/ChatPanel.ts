@@ -3,7 +3,7 @@ import { randomUUID } from 'crypto';
 import type { SidecarManager } from '../sidecar/SidecarManager';
 import type { AttentionHeatmap } from '../editor/AttentionHeatmap';
 import { getWebviewHtml } from './webviewUtils';
-import { applyAllCodeBlocks, applyEdit, autoSaveAppliedFiles, parseCodeBlocks, resolveFileUri, stripNeuroCodeAppendix, type ParseCodeBlocksOptions } from '../utils/DiffApplier';
+import { applyAllCodeBlocks, applyEdit, autoSaveAppliedFiles, isAgentToolArtifact, parseCodeBlocks, resolveFileUri, stripNeuroCodeAppendix, type ParseCodeBlocksOptions } from '../utils/DiffApplier';
 import { ChangeReviewManager, type ChangeReviewSummary } from '../services/ChangeReviewManager';
 import { buildContinuePrompt, isTruncatedResponse as isTruncatedLlmResponse, mergeContinuation } from '../utils/CodeBatchMerger';
 import type { AgentChatData, ChatAttachment, ChatIntent, ChatMode, ChatTurn, HealthData } from '../sidecar/types';
@@ -753,7 +753,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
 			const messageId = randomUUID();
 			let changeReview: ChangeReviewSummary | undefined;
-			if (finalData.intent === 'edit' && rawData.response.includes('```')) {
+			if (finalData.intent === 'edit' && rawData.response.includes('```') && finalData.mode !== 'tool-loop') {
 				changeReview = ChangeReviewManager.registerFromText(
 					messageId,
 					stripNeuroCodeAppendix(rawData.response),
@@ -899,6 +899,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 		const applied: Array<{ file: string; action: 'created' | 'updated' }> = [];
 
 		for (const write of writes) {
+			if (isAgentToolArtifact(write.content)) {
+				console.warn(`[ChatPanel] Skipping invalid write_file content for ${write.path}`);
+				continue;
+			}
+
 			const uri = resolveFileUri(write.path, projectPath);
 			if (!uri) {
 				continue;
@@ -1016,6 +1021,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 		projectPath: string,
 	): Promise<AgentChatData> {
 		if (data.intent !== 'edit' || !getConfig().chat.autoApply || data.readOnly || data.allowWrites === false) {
+			return data;
+		}
+
+		// Agent tool loop applies edits via pendingWrites only — never parse markdown/code fences.
+		if (data.mode === 'tool-loop' || data.toolLog?.length || data.pendingWrites !== undefined) {
+			return data;
+		}
+
+		if ((data.filesApplied?.length ?? 0) > 0) {
 			return data;
 		}
 
