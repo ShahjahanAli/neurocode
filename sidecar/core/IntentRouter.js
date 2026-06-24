@@ -54,7 +54,7 @@ const FIX_REQUEST_RE =
 
 /** Debug / config questions — investigate, do not rewrite files. */
 const INVESTIGATE_RE =
-	/\b(why|how come|root cause|what causes|what caused|debug|diagnos|figure out|not resolved|still (?:fail|broken|wrong)|env(?:ironment)?(?:\s+file)?|\.env|dotenv|environment variable|config(?:uration)?|settings?|payload|api\s*key|which model|wrong model|default (?:model|setting)|hardcoded|should (?:it|we) (?:use|read)|check (?:the |my )?(?:env|config|settings|\.env)|reading from env|from env)\b/i;
+	/\b(why|how come|root cause|what causes|what caused|debug|diagnos|figure out|not resolved|still (?:not )?(?:working|resolved|fixed|correct)|still (?:getting|seeing|have)|not working|doesn'?t work|didn'?t work|same (?:issue|problem|payload|error)|env(?:ironment)?(?:\s+file)?|\.env|dotenv|environment variable|config(?:uration)?|settings?|payload|api\s*key|which model|wrong model|default (?:model|setting)|hardcoded|should (?:it|we) (?:use|read)|check (?:the |my )?(?:env|config|settings|\.env)|reading from env|from env|go over|walk (?:me )?through|trace (?:through)?|review (?:the )?(?:full |whole )?(?:system|flow|stack)|full system|entire (?:flow|stack)|end.to.end|test message|why am i seeing)\b/i;
 
 const EXPLICIT_WRITE_RE =
 	/\b(implement|apply|write (?:the )?code|change (?:the )?code|update (?:the )?file|edit (?:the )?file|create (?:the )?file|go ahead and (?:fix|implement)|please (?:fix|implement|update)|just fix)\b/i;
@@ -62,7 +62,7 @@ const EXPLICIT_WRITE_RE =
 const OPTION_PICK_RE =
 	/\b(option|choice|number|#|item|feature|step)\s*#?\s*(\d+)\b/i;
 
-const ROUTER_MODE = (process.env.NEUROCODE_INTENT_ROUTER || 'hybrid').toLowerCase();
+const ROUTER_MODE = (process.env.NEUROCODE_INTENT_ROUTER || 'llm').toLowerCase();
 
 const LLM_ROUTER_PROMPT = `You route messages for a VS Code coding assistant (Cursor-style).
 Return ONLY valid JSON (no markdown):
@@ -70,6 +70,7 @@ Return ONLY valid JSON (no markdown):
 
 Rules:
 - Questions about why/how/errors/config/env/payload/models → intent chat, investigate true, allow_writes false
+- "still not working", "go over the system", regression after a failed fix → investigate true, allow_writes false
 - Explicit requests to implement/fix/write code → intent edit, investigate false, allow_writes true
 - Multi-step feature design → intent plan, investigate false, allow_writes false
 - "thanks" / social → intent chat, investigate false, allow_writes false
@@ -93,13 +94,33 @@ export function isInvestigateTask(message) {
 	if (INVESTIGATE_RE.test(m)) {
 		return true;
 	}
-	if (isLikelyQuestion(message) && /\b(error|payload|env|config|setting|model|api|gateway|choices|null|undefined)\b/i.test(m)) {
+	if (isLikelyQuestion(message) && /\b(error|payload|env|config|setting|model|api|gateway|choices|null|undefined|seeing|message)\b/i.test(m)) {
 		return true;
 	}
-	if (/\bnot resolved\b/i.test(m) || /\bstill (?:getting|seeing|have)\b/i.test(m)) {
+	if (/\bnot resolved\b/i.test(m) || /\bstill\b/i.test(m) && /\b(not working|broken|wrong|resolved|fixed|seeing)\b/i.test(m)) {
 		return true;
 	}
 	return false;
+}
+
+/**
+ * User reports a prior fix or explanation did not work — read-only investigation only.
+ * @param {string} message
+ * @param {Array<{role: string, content: string}>} [history]
+ * @returns {boolean}
+ */
+export function isRegressionReport(message, history = []) {
+	const m = message.trim().toLowerCase();
+	if (isInvestigateTask(message)) {
+		return true;
+	}
+	if (!/\b(still|not working|not resolved|didn'?t work|doesn'?t work|same problem|same issue)\b/i.test(m)) {
+		return false;
+	}
+	if (/\b(payload|model|env|error|issue|fix)\b/i.test(m)) {
+		return true;
+	}
+	return history.some((t) => t.role === 'assistant');
 }
 
 /**
@@ -232,6 +253,11 @@ function scoreIntents(message, history) {
 		scores.edit += 4;
 	} else if (BROKEN_RE.test(m) && question) {
 		scores.chat += 2;
+	}
+
+	if (/\b(still not|not working|not resolved)\b/.test(m)) {
+		scores.chat += 8;
+		scores.edit = Math.max(0, scores.edit - 4);
 	}
 
 	if (EDIT_RE.test(m)) {
@@ -384,7 +410,7 @@ export function resolveUserIntent(task, options = {}) {
 	}
 
 	const followUpTask = inferFollowUpTask(task, history);
-	if (followUpTask) {
+	if (followUpTask && !isRegressionReport(task, history)) {
 		return finalizeResolution({
 			intent: 'edit',
 			effectiveTask: followUpTask,
@@ -393,6 +419,18 @@ export function resolveUserIntent(task, options = {}) {
 			investigate: false,
 			confidence: 'high',
 			reason: 'conversation:follow-up',
+		});
+	}
+
+	if (isRegressionReport(task, history) && !EXPLICIT_WRITE_RE.test(trimmed)) {
+		return finalizeResolution({
+			intent: 'chat',
+			effectiveTask: task,
+			readOnly: true,
+			allowWrites: false,
+			investigate: true,
+			confidence: 'high',
+			reason: 'regression:investigate',
 		});
 	}
 
@@ -411,6 +449,7 @@ export function resolveUserIntent(task, options = {}) {
 	if (
 		fixOnCheck &&
 		!isInvestigateTask(task) &&
+		!isRegressionReport(task, history) &&
 		!isLikelyQuestion(task) &&
 		shouldAutoFixOnCheck(task, shards, fixOnCheck)
 	) {
@@ -433,8 +472,8 @@ export function resolveUserIntent(task, options = {}) {
 
 	const allowWrites = intent === 'edit' && (
 		EXPLICIT_WRITE_RE.test(trimmed) ||
-		(!question && scores.edit >= 4) ||
-		scores.edit >= 6
+		((!question && scores.edit >= 4) || scores.edit >= 6) &&
+		!isRegressionReport(task, history)
 	);
 
 	const investigate =
@@ -514,7 +553,7 @@ async function resolveWithLlm(adapter, task, history) {
 }
 
 /**
- * Resolves intent with optional LLM assist (hybrid mode).
+ * Resolves intent with optional LLM assist (hybrid / llm modes).
  * @param {string} task
  * @param {object} options
  * @param {import('../adapters/OpenAICompatibleAdapter.js').OpenAICompatibleAdapter | import('../adapters/OllamaAdapter.js').OllamaAdapter | null} [adapter]

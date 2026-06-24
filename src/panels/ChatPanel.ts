@@ -625,6 +625,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 		);
 	}
 
+	/** @param text - User message that may be debug/env/payload investigation. */
+	private isDiagnosticTask(text: string): boolean {
+		const m = text.trim().toLowerCase();
+		return (
+			/\b(still not|not resolved|not working|payload|\.env|why am i seeing|go over|full system|test message|debug|root cause)\b/i.test(m) &&
+			!/\b(implement|apply|write the code|fix it now|just fix|go ahead and)\b/i.test(m)
+		);
+	}
+
 	/**
 	 * Runs a chat agent request with streaming.
 	 * @param task - User task text.
@@ -690,7 +699,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 			}
 
 			let finalData = await this.maybeApplyOrphanCode(
-				await this.maybeAutoApplyEdits(rawData, folder.uri.fsPath),
+				await this.maybeAutoApplyEdits(rawData, folder.uri.fsPath, task),
 				folder.uri.fsPath,
 			);
 
@@ -997,9 +1006,19 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 	private async maybeAutoApplyEdits(
 		data: AgentChatData,
 		projectPath: string,
+		userTask?: string,
 	): Promise<AgentChatData> {
 		if (data.intent !== 'edit' || !getConfig().chat.autoApply || data.readOnly || data.allowWrites === false) {
 			return data;
+		}
+
+		if (userTask && this.isDiagnosticTask(userTask)) {
+			return {
+				...data,
+				readOnly: true,
+				allowWrites: false,
+				response: `${data.response}\n\n---\n**No files written** — this looked like a debug/investigation question. Switch to **Implement** mode or say **implement the fix** to apply code changes.`,
+			};
 		}
 
 		const truncated = this.isTruncatedResponse(data.response);

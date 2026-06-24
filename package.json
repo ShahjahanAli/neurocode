@@ -471,8 +471,8 @@
         "neurocode.chat.intentRouter": {
           "type": "string",
           "enum": ["heuristic", "hybrid", "llm"],
-          "default": "hybrid",
-          "description": "How Auto mode routes messages: heuristic (rules), hybrid (rules + LLM for ambiguous), llm (always classify with LLM)."
+          "default": "llm",
+          "description": "How Auto mode routes messages: llm (Cursor-style — always classify with LLM), hybrid (rules + LLM for ambiguous), heuristic (rules only)."
         },
         "neurocode.chat.investigateMaxSteps": {
           "type": "number",

@@ -208,7 +208,7 @@ export function getConfig(): NeuroCodeConfig {
 			agentMaxSteps: cfg.get<number>('chat.agentMaxSteps', 8),
 			agentToolMaxSteps: cfg.get<number>('chat.agentToolMaxSteps', 10),
 			maxAttachments: cfg.get<number>('chat.maxAttachments', 5),
-			intentRouter: cfg.get<'heuristic' | 'hybrid' | 'llm'>('chat.intentRouter', 'hybrid'),
+			intentRouter: cfg.get<'heuristic' | 'hybrid' | 'llm'>('chat.intentRouter', 'llm'),
 			investigateMaxSteps: cfg.get<number>('chat.investigateMaxSteps', 8),
 		},
 		feedback: {

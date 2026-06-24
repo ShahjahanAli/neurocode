@@ -34,6 +34,18 @@ Available tools:
 - Output ONLY the fenced tool block during tool turns — no prose before or after the fence`;
 
 /**
+ * Removes leaked tool-call fences from display text.
+ * @param {string} text
+ * @returns {string}
+ */
+function stripToolArtifacts(text) {
+	return text
+		.replace(/```neurocode-tool[\s\S]*?```/gi, '')
+		.replace(/^\s*reply\s*$/gim, '')
+		.trim();
+}
+
+/**
  * @param {string} tool
  * @param {Record<string, unknown>} args
  * @param {number} step
@@ -63,6 +75,9 @@ function suggestPrefetchPaths(task) {
 	}
 	if (/\b(payload|llm|model|gpt-4o|default|getServerDefaults|resolveChatConfig)\b/i.test(lower)) {
 		paths.push('lib/llm.ts', 'app/api/chat/route.ts');
+	}
+	if (/\b(test message|chatinterface|frontend|send button|onClick|input field)\b/i.test(lower)) {
+		paths.push('components/chat/ChatInterface.tsx', 'app/page.tsx');
 	}
 	return [...new Set(paths)];
 }
@@ -255,7 +270,7 @@ export async function streamInvestigateLoop(services, params, write) {
 					continue;
 				}
 
-				finalReply = response.trim();
+				finalReply = stripToolArtifacts(response.trim());
 				if (finalReply) {
 					write({ type: 'stream_set', text: finalReply });
 				}
@@ -278,7 +293,7 @@ export async function streamInvestigateLoop(services, params, write) {
 			}
 
 			if (toolCall.tool === 'reply') {
-				finalReply = String(toolCall.args.message ?? response).trim();
+				finalReply = stripToolArtifacts(String(toolCall.args.message ?? response).trim());
 				toolLog.push({ tool: 'reply', args: toolCall.args });
 				write({ type: 'stream_set', text: finalReply });
 				break;
@@ -303,7 +318,7 @@ export async function streamInvestigateLoop(services, params, write) {
 
 		if (!finalReply) {
 			write({ type: 'status', content: '_Summarizing findings…_' });
-			finalReply = (await synthesizeInvestigateReply(adapter, messages, toolLog)).trim();
+			finalReply = stripToolArtifacts((await synthesizeInvestigateReply(adapter, messages, toolLog)).trim());
 			write({ type: 'stream_set', text: finalReply });
 		}
 

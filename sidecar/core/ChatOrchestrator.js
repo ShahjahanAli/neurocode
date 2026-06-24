@@ -56,6 +56,7 @@ Rules:
 - Give honest, practical feedback on code quality, UX, and architecture
 - Do NOT dump entire file contents unless the user explicitly asks to see code
 - Do NOT rewrite or "fix" files when the user only asked to check, review, or debug — explain issues and read config/env files instead
+- Do NOT claim you read a file unless it appears in the project context below — if unsure, say which file to open or ask the user to run Index Project
 - Do NOT ask the user to paste code — the workspace context is already attached
 - If context is truly empty, tell them to run **NeuroCode: Index Project** from the Command Palette
 - Keep explanations concise but thorough
@@ -205,6 +206,19 @@ export async function resolveIntentWithContext(task, forceIntent, shards, histor
 }
 
 /**
+ * @param {import('./IntentRouter.js').IntentResolution} resolved
+ * @param {ChatMode} [chatMode]
+ * @returns {boolean}
+ */
+function shouldUseInvestigateLoop(resolved, chatMode = 'auto') {
+	return (
+		(resolved.investigate || chatMode === 'explain') &&
+		!resolved.agentic &&
+		resolved.intent !== 'plan'
+	);
+}
+
+/**
  * @param {import('./services.js').services} services
  * @param {object} params
  * @param {string} params.task
@@ -256,7 +270,7 @@ export async function runOrchestratedChat(services, params) {
 		fixOnCheck,
 	}, routerAdapter);
 
-	if (resolved.investigate && !resolved.agentic && resolved.intent !== 'plan') {
+	if (shouldUseInvestigateLoop(resolved, chatMode)) {
 		let investigateData;
 		await streamInvestigateLoop(services, {
 			task: resolved.effectiveTask,
@@ -417,7 +431,7 @@ export async function streamOrchestratedChat(services, params, write) {
 			fixOnCheck,
 		}, routerAdapter);
 
-		if (resolved.investigate && !resolved.agentic && resolved.intent !== 'plan') {
+		if (shouldUseInvestigateLoop(resolved, chatMode)) {
 			return streamInvestigateLoop(services, {
 				task: resolved.effectiveTask,
 				activeFile,
